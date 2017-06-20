@@ -1,0 +1,6 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/Win32-Packer.t
+lib/Win32/Packer.pm
