@@ -1,6 +1,6 @@
 #ifdef(THISISPERLCODE)
 
-package Win32::Packer::WrapperCCode;
+package Win32::Packer::WrapperCode;
 seek(DATA, 0, 0);
 $wrapper_c_code = <__DATA__>;
 
