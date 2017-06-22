@@ -8,15 +8,17 @@ use warnings;
 use Carp;
 use Log::Any;
 use Path::Tiny;
-use Module::ScanDeps ();
+use Module::ScanDeps;
 use Text::CSV_XS ();
 use Data::Dumper;
+use Config;
+use Capture::Tiny qw(capture);
 
 use Win32::Packer::WrapperCCode;
 use Win32::Packer::LoadPLCode;
+our ($wrapper_c_code, $load_pl_code);
 
 use Moo;
-
 
 sub __to_bool;
 sub __to_list;
@@ -27,7 +29,6 @@ sub __assert_dir;
 sub __assert_file;
 sub __assert_file_name;
 sub __mkpath;
-sub __merge_opts;
 
 has _OS            => ( is => 'ro',
                         isa => sub { $_[0] =~ /^MSWin32/i or croak "Unsupported OS" },
@@ -41,8 +42,7 @@ has extra_exe      => ( is => 'ro', coerce => \&__to_path_list, default => sub {
 has work_dir       => ( is => 'lazy', coerce => \&__mkpath, isa => \&__assert_dir );
 has perl_exe       => ( is => 'lazy', isa => \&__assert_file,
                         default => sub { path($^X)->realpath } );
-has strawberry     => ( is => 'lazy', isa => \&__assert_dir,
-                        default => sub { shift->perl_exe->parent->parent->parent } );
+has strawberry     => ( is => 'lazy', isa => \&__assert_dir );
 has windows        => ( is => 'lazy', isa => \&__assert_dir,
                         default => \&__windows_directory );
 has inc            => ( is => 'lazy', coerce => \&__to_list,
@@ -59,18 +59,34 @@ has keep_work_dir  => ( is => 'ro', coerce => \&__to_bool, default => sub { 0 } 
 has output_dir     => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir,
                         default => sub { path('.')->realpath->stringify } );
 
-has gcc_exe        => ( is => 'ro', isa => \&__assert_file } );
-has ld_exe         => ( is => 'ro', isa => \&__assert_file } );
+has cc_exe         => ( is => 'lazy', isa => \&__assert_file );
+has ld_exe         => ( is => 'lazy', isa => \&__assert_file );
 
-sub _build_gcc_exe {
+has strawberry_c_bin => ( is => 'lazy', isa => \&__assert_dir );
+
+sub _build_strawberry {
     my $self = shift;
-    path($self->strawberry)->child("c/gcc.exe")->realpath->stringify
+    my $p = $self->perl_exe->parent->parent->parent->stringify;
+    $self->log->trace("Strawberry dir: $p");
+    $p
 }
 
-sub _build_ld_exe {
+sub _build_strawberry_c_bin {
     my $self = shift;
-    path($self->strawberry)->child("c/ld.exe")->realpath->stringify
+    path($self->strawberry)->child('c/bin')->stringify;
 }
+
+sub _config2exe {
+    my ($self, $name) = @_;
+    my $base = $Config{$name};
+    $base =~ s/(?:\.exe)?$/.exe/i;
+    my $exe = path($base)->absolute($self->strawberry_c_bin)->stringify;
+    $self->log->debugf("exe for command '%s' is '%s'", $name, $exe);
+    $exe
+}
+
+sub _build_cc_exe { shift->_config2exe('cc') }
+sub _build_ld_exe { shift->_config2exe('ld') }
 
 sub _build_work_dir {
     my $self = shift;
@@ -88,10 +104,13 @@ sub _build__app_dir {
     $p->realpath->stringify;
 }
 
-sub _die { croak shift->fatal(@_ ? join(': ', @_) : $@) }
+sub _die { croak shift->log->fatal(@_ ? join(': ', @_) : $@) }
 
 sub build {
     my $self = shift;
+
+    $self->log->tracef("%INC: %s", \%INC);
+
     $self->_clean_work_dir;
     $self->_do_clean_cache if $self->clean_cache;
     my $deps = $self->_scan_deps;
@@ -109,24 +128,53 @@ sub _do_clean_cache {
     }
 }
 
+sub _module2path {
+    my ($self, $mod) = @_;
+    $mod =~ s/::/\//g;
+    "$mod.pm";
+}
+
+sub _merge_opts {
+    my ($self, $defs, %opts) = @_;
+    for my $k (keys %$defs) {
+        my $v = $opts{$k};
+        if (defined $v) {
+            ref $v eq 'ARRAY' and $opts{$k} = [@$v, @{$defs->{$k}}];
+        }
+        else {
+            $opts{$k} = $defs->{$k};
+        }
+    }
+
+    $self->log->tracef("merged options: %s", \%opts);
+    %opts
+}
+
 sub _scan_deps {
     my $self = shift;
 
     $self->log->info("Calculating dependencies...");
-    my $rv = {};
-    do {
-        $self->log->tracef("inc: %s, extra modules: %s, scripts: %s", $self->inc, $self->extra_modules, $self->scripts);
-        local @Module::ScanDeps::IncludeLibs = @{$self->inc};
-        $rv = Module::ScanDeps::add_deps(rv => $rv,
-                                         modules => $self->extra_modules);
+    $self->log->tracef("inc: %s, extra modules: %s, scripts: %s", $self->inc, $self->extra_modules, $self->scripts);
+    my $rv = do {
+        #local @Module::ScanDeps::IncludeLibs = @{$self->inc};
+
+        my @pm_files = map {
+            Module::ScanDeps::_find_in_inc($self->_module2path($_))
+                    or $self->_die("module $_ not found")
+                } @{$self->extra_modules};
+        $self->log->debugf("pm files: %s", \@pm_files);
+
+        my @script_files = map $_->{path}, @{$self->scripts};
+        $self->log->debugf("script files: %s", \@script_files);
 
         my @more_args;
         push @more_args, cache_file => path($self->cache)->child('module_scan_deps.cache')->stringify
             if defined $self->cache;
-        $rv = Module::ScanDeps::scan_deps(__merge_opts($self->scan_deps_opts,
-                                                       rv => $rv,
+
+        Module::ScanDeps::scan_deps($self->_merge_opts($self->scan_deps_opts,
                                                        recurse => 1,
-                                                       files => [ map($_->{path}, @{$self->scripts})],
+                                                       warn_missing => 1,
+                                                       files => [@script_files, @pm_files],
                                                        @more_args));
     };
 
@@ -144,7 +192,7 @@ sub _scan_deps {
 sub _clean_work_dir {
     my $self = shift;
     $self->log->debug("cleaning work dir");
-    path($self->work_dir)->remove_tree({safe => 0, keep_root => 1});
+    eval { path($self->work_dir)->remove_tree({safe => 0, keep_root => 1}) };
 }
 
 sub _populate_app_dir {
@@ -181,24 +229,27 @@ sub _populate_app_dir {
             $self->log->debugf("copying '%s' to '%s'", $path, $to);
             $path->copy($to);
 
-            my $wrapper = $self->_make_wrapper("$basename.exe", %$script);
+            my $wrapper = $self->_make_wrapper_exe($wrapper_obj, %$script);
             my $wrapper_to = $app_dir->child("$basename.exe");
             $self->log->debugf("copying '%s' to '%s'", $wrapper, $wrapper_to);
-
+            path($wrapper)->copy($wrapper_to);
         }
 
-        $self->_copy_load_pl;
+        my $load_pl = $self->_make_load_pl;
+        my $to = $app_dir->child('load.pl');
+        $self->log->debugf("copying '%s' to '%s'", $load_pl, $to);
+        path($load_pl)->copy($to);
     }
 }
 
 sub _wrapper_dir {
     my $self = shift;
-    my $wd = path($self->work_dir)->wrapper;
+    my $wd = path($self->work_dir)->child('wrapper');
     $wd->mkpath;
     $wd->realpath->stringify
 }
 
-sub make_wrapper_c {
+sub _make_wrapper_c {
     my $self = shift;
     my $wrapper_dir = $self->_wrapper_dir;
     my $p = path($wrapper_dir)->child("wrapper.c");
@@ -206,18 +257,51 @@ sub make_wrapper_c {
     $p->realpath->stringify;
 }
 
-sub make_wrapper_obj {
+sub _make_wrapper_obj {
     my ($self, $wrapper_c) = @_;
     my $wrapper_dir = $self->_wrapper_dir;
-    my $p = path($wrapper_dir)->child("wrapper.obj");
-    system 
+    my $wrapper_obj = path($wrapper_dir)->child("wrapper.obj")->stringify;
+    $self->_run_cmd($self->cc_exe, "-I$Config{archlibexp}/CORE", \$Config{ccflags}, '-c', $wrapper_c, '-o', $wrapper_obj)
+        or $self->_die("unable to compile '$wrapper_c'");
+    $wrapper_obj
 }
 
-
-
 sub _make_wrapper_exe {
-    my ($self, $obj, %opts) = @_;
+    my ($self, $wrapper_obj, %opts) = @_;
+    my $wrapper_dir = $self->_wrapper_dir;
+    my $wrapper_exe = path($wrapper_dir)->child("wrapper.exe")->stringify;
+    my @libpth = split /\s+/, $Config{libpth};
+    my $libperl = $Config{libperl};
+    $libperl =~ s/^lib//i; $libperl =~ s/\.a$//i;
+    $self->_run_cmd($self->ld_exe,
+                    \$Config{ldflags},
+                    $wrapper_obj,
+                    map("-L$_", @libpth),
+                    "-l$libperl",
+                    \$Config{perllibs},
+                    -o => $wrapper_exe)
+        or $self->_die("unable to link '$wrapper_obj'");
+    $wrapper_exe
+}
 
+sub _make_load_pl {
+    my $self = shift;
+    my $wrapper_dir = $self->_wrapper_dir;
+    my $p = path($wrapper_dir)->child("load.pl");
+    $p->spew($load_pl_code);
+    $self->log->debug("load.pl saved to $p");
+    $p->realpath->stringify;
+}
+
+sub _run_cmd {
+    my $self = shift;
+    my @cmd = map { ref eq 'SCALAR' ? grep length, split /\s+/, $$_ : $_ } @_;
+    $self->log->debugf("running command: %s", \@cmd);
+    my ($out, $err, $rc) = capture {
+        system @cmd;
+    };
+    $self->log->debugf("command rc: %s, out: %s, err: %s", $rc, $out, $err);
+    wantarray ? (($rc == 0), $out, $err) : ($rc == 0)
 }
 
 # helper functions
@@ -249,19 +333,6 @@ sub __windows_directory {
     $fn->Call($buffer, length $buffer);
     $buffer =~ tr/\0//d;
     path($buffer)->realpath;
-}
-sub __merge_opts {
-    my ($defs, %opts) = @_;
-    for my $k (keys %$defs) {
-        my $v = $opts{$k};
-        if (defined $v) {
-            ref $v eq 'ARRAY' and $opts{$k} = [@$v, @{$defs->{$k}}];
-        }
-        else {
-            $opts{$k} = $defs->{$k};
-        }
-    }
-    %opts
 }
 
 1;

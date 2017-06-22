@@ -1,15 +1,31 @@
-#ifdef(THISISPERLCODE)
+package Win32::Packer;
 
-package Win32::Packer::WrapperCode;
-seek(DATA, 0, 0);
-$wrapper_c_code = <__DATA__>;
+seek DATA, 0, 0;
+my $line_n;
+while (<DATA>) {
+    if (/^__DATA__$/) {
+        $line_n = $.;
+        last
+    }
+}
+
+$wrapper_c_code = do {
+    local $/;
+    qq(#line $line_n "$INC{'Win32/Packer/WrapperCCode.pm'}"\n) . <DATA>
+};
+
+1;
 
 __DATA__
 
-#endif
-
 #include <EXTERN.h>
 #include <perl.h>
+
+EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
+static void xs_init(pTHX) {
+    char *file = __FILE__;
+    newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
+}
 
 static void
 fatal_error(char *msg) {
@@ -77,17 +93,15 @@ int main(int argc, char **argv, char **env) {
     PL_exit_flags |= PERL_EXIT_DESTRUCT_END;
 
     fprintf(stderr, "Parsing loader!\n"); fflush(stderr);
-    perl_parse(my_perl, NULL, pargc, pargv, NULL);
+    int rc = perl_parse(my_perl, xs_init, pargc, pargv, NULL);
+
+    fprintf(stderr, "rc: %d\n", rc);
 
     fprintf(stderr, "Running loader!\n"); fflush(stderr);
-    perl_run(my_perl);
+    rc = perl_run(my_perl);
+    fprintf(stderr, "rc: %d\n", rc);
 
     fprintf(stderr, "Destroying!\n"); fflush(stderr);
     perl_destruct(my_perl);
     perl_free(my_perl);
 }
-
-/*
-
-EOC
-
