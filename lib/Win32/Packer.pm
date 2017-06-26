@@ -13,6 +13,7 @@ use Text::CSV_XS ();
 use Data::Dumper;
 use Config;
 use Capture::Tiny qw(capture);
+use Win32::Ldd qw(pe_dependencies);
 
 use Win32::Packer::WrapperCCode;
 use Win32::Packer::LoadPLCode;
@@ -39,6 +40,7 @@ has extra_inc      => ( is => 'ro', coerce => \&__to_list, default => sub { [] }
 has scripts        => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] },
                         isa => sub { @{$_[0]} > 0 or croak "scripts argument missing" } );
 has extra_exe      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
+has extra_dll      => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
 has work_dir       => ( is => 'lazy', coerce => \&__mkpath, isa => \&__assert_dir );
 has perl_exe       => ( is => 'lazy', isa => \&__assert_file,
                         default => sub { path($^X)->realpath } );
@@ -113,8 +115,11 @@ sub build {
 
     $self->_clean_work_dir;
     $self->_do_clean_cache if $self->clean_cache;
-    my $deps = $self->_scan_deps;
-    $self->_populate_app_dir($deps);
+    my $pm_deps = $self->_scan_deps;
+
+    my $pe_deps = $self->_scan_dll_deps($pm_deps);
+
+    $self->_populate_app_dir($pm_deps, $pe_deps);
 }
 
 sub _do_clean_cache {
@@ -156,7 +161,7 @@ sub _scan_deps {
     $self->log->info("Calculating dependencies...");
     $self->log->tracef("inc: %s, extra modules: %s, scripts: %s", $self->inc, $self->extra_modules, $self->scripts);
     my $rv = do {
-        #local @Module::ScanDeps::IncludeLibs = @{$self->inc};
+        local @Module::ScanDeps::IncludeLibs = @{$self->inc};
 
         my @pm_files = map {
             Module::ScanDeps::_find_in_inc($self->_module2path($_))
@@ -195,8 +200,64 @@ sub _clean_work_dir {
     eval { path($self->work_dir)->remove_tree({safe => 0, keep_root => 1}) };
 }
 
+sub _push_pe_dependencies {
+    my ($self, $pe_deps, $dt) = @_;
+    if ($dt->{resolved}) {
+        my $module = $dt->{module};
+        my $resolved_module = $dt->{resolved_module};
+
+        unless ($module =~ /\.(?:exe|xs\.dll)$/i or
+                path($self->windows)->subsumes($resolved_module)) {
+            unless (defined $pe_deps->{$module}) {
+                $self->log->tracef("resolving DLL dependency %s to %s", $module, $resolved_module);
+                $pe_deps->{$module} = $resolved_module
+            }
+        }
+    }
+
+    if (defined (my $children = $dt->{children})) {
+        $self->_push_pe_dependencies($pe_deps, $_) for @$children;
+    }
+}
+
+sub _scan_xs_dll_deps {
+    my ($self, $pe_deps, $pm_deps) = @_;
+
+    $self->log->info("Looking for DLL dependencies for XS modules");
+
+    for my $dep (values %$pm_deps) {
+        if ($dep->{key} =~ /\.xs\.dll$/i) {
+            $self->log->debug("looking for '$dep->{file}' DLL dependencies");
+            my $file = path($dep->{file})->realpath;
+            my $dt = pe_dependencies($file);
+            $self->_push_pe_dependencies($pe_deps, $dt);
+        }
+    }
+}
+
+sub _scan_exe_dll_deps {
+    my ($self, $pe_deps) = @_;
+
+    $self->log->info("Looking for DLL dependencies for EXE and extra DLL files");
+
+    my @exes = ($self->perl_exe, @{$self->extra_exe}, @{$self->extra_dll});
+    for my $exe (@exes) {
+        $self->log->debug("looking for '$exe' DLL dependencies");
+        my $dt = pe_dependencies($exe);
+        $self->_push_pe_dependencies($pe_deps, $dt);
+    }
+}
+
+sub _scan_dll_deps {
+    my ($self, $pm_deps) = @_;
+    my $pe_deps = {};
+    $self->_scan_xs_dll_deps($pe_deps, $pm_deps);
+    $self->_scan_exe_dll_deps($pe_deps);
+    $pe_deps
+}
+
 sub _populate_app_dir {
-    my ($self, $deps) = @_;
+    my ($self, $pm_deps, $pe_deps) = @_;
 
     my $app_dir = path($self->_app_dir);
 
@@ -205,7 +266,7 @@ sub _populate_app_dir {
     my $lib_dir = $app_dir->child('lib');
     $lib_dir->mkpath;
 
-    for my $dep (values %$deps) {
+    for my $dep (values %$pm_deps) {
         my $path = path($dep->{file})->realpath;
         my $to = $lib_dir->child($dep->{key});
         $self->log->debugf("copying '%s' to '%s'", $path, $to);
@@ -239,6 +300,13 @@ sub _populate_app_dir {
         my $to = $app_dir->child('load.pl');
         $self->log->debugf("copying '%s' to '%s'", $load_pl, $to);
         path($load_pl)->copy($to);
+    }
+
+    for my $dll (keys %$pe_deps) {
+        my $from = $pe_deps->{$dll};
+        my $to = $app_dir->child($dll);
+        $self->log->debugf("copying '%s' to '%s'", $from, $to);
+        path($from)->copy($to);
     }
 }
 
