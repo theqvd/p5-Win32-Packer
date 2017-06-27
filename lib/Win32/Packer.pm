@@ -66,6 +66,36 @@ has ld_exe         => ( is => 'lazy', isa => \&__assert_file );
 
 has strawberry_c_bin => ( is => 'lazy', isa => \&__assert_dir );
 
+has cygwin         => ( is => 'lazy', isa => \&__assert_dir );
+
+has system_drive   => ( is => 'lazy', isa => \&__assert_dir,
+                        default => sub { $ENV{SystemDrive} // 'C://' } );
+
+has cygpath        => ( is => 'lazy', isa => \&__assert_file );
+
+
+sub _build_cygwin {
+    my $self = shift;
+
+    require Win32::TieRegistry;
+    my %reg;
+    Win32::TieRegistry->import(TiedHash => \%reg);
+
+    for my $dir ( $reg{'HKEY_CURRENT_USER\\SOFTWARE\\Cygwin\\setup\\rootdir'},
+                  $reg{'HKEY_LOCAL_MACHINE\\SOFTWARE\\Cygwin\\setup\\rootdir'},
+                  path($self->system_drive)->child('Cygwin')->stringify ) {
+        defined $dir and -d $dir or next;
+        return $dir;
+    }
+
+    croak "Cygwin directory not found";
+}
+
+sub _build_cygpath {
+    my $self = shift;
+    path($self->cygwin)->child('bin/cygpath.exe')->stringify;
+}
+
 sub _build_strawberry {
     my $self = shift;
     my $p = $self->perl_exe->parent->parent->parent->stringify;
@@ -111,7 +141,8 @@ sub _die { croak shift->log->fatal(@_ ? join(': ', @_) : $@) }
 sub build {
     my $self = shift;
 
-    $self->log->tracef("%INC: %s", \%INC);
+    $self->log->tracef("Win32::Packer object before build: %s", $self);
+    #$self->log->tracef("%INC: %s", \%INC);
 
     $self->_clean_work_dir;
     $self->_do_clean_cache if $self->clean_cache;
@@ -136,7 +167,8 @@ sub _do_clean_cache {
 sub _module2path {
     my ($self, $mod) = @_;
     $mod =~ s/::/\//g;
-    "$mod.pm";
+    $mod =~ s{(\.\w+)?$}{$1 // '.pm'}ei;
+    $mod
 }
 
 sub _merge_opts {
@@ -201,22 +233,23 @@ sub _clean_work_dir {
 }
 
 sub _push_pe_dependencies {
-    my ($self, $pe_deps, $dt) = @_;
+    my ($self, $pe_deps, $dt, $subdir) = @_;
     if ($dt->{resolved}) {
         my $module = $dt->{module};
+        $module = path($subdir)->child($module)->stringify if defined $subdir;
         my $resolved_module = $dt->{resolved_module};
 
         unless ($module =~ /\.(?:exe|xs\.dll)$/i or
                 path($self->windows)->subsumes($resolved_module)) {
             unless (defined $pe_deps->{$module}) {
-                $self->log->tracef("resolving DLL dependency %s to %s", $module, $resolved_module);
+                $self->log->tracef("resolving DLL dependency %s to %s (subdir: %s)", $module, $resolved_module, $subdir);
                 $pe_deps->{$module} = $resolved_module
             }
         }
     }
 
     if (defined (my $children = $dt->{children})) {
-        $self->_push_pe_dependencies($pe_deps, $_) for @$children;
+        $self->_push_pe_dependencies($pe_deps, $_, $subdir) for @$children;
     }
 }
 
@@ -240,11 +273,20 @@ sub _scan_exe_dll_deps {
 
     $self->log->info("Looking for DLL dependencies for EXE and extra DLL files");
 
-    my @exes = ($self->perl_exe, @{$self->extra_exe}, @{$self->extra_dll});
+    my @exes = ( @{__to_path_list($self->perl_exe)},
+                 @{$self->extra_exe},
+                 @{$self->extra_dll} );
     for my $exe (@exes) {
-        $self->log->debug("looking for '$exe' DLL dependencies");
-        my $dt = pe_dependencies($exe);
-        $self->_push_pe_dependencies($pe_deps, $dt);
+        $self->log->debugf("looking for '%s' DLL dependencies", $exe);
+        my $path = $exe->{path};
+        my $subdir = $exe->{subdir};
+
+        my $parent = path($path)->parent;
+        my $dt = do {
+            local $ENV{PATH} = "$parent;$ENV{PATH}";
+            pe_dependencies($path)
+        };
+        $self->_push_pe_dependencies($pe_deps, $dt, $subdir);
     }
 }
 
@@ -306,7 +348,19 @@ sub _populate_app_dir {
         my $from = $pe_deps->{$dll};
         my $to = $app_dir->child($dll);
         $self->log->debugf("copying '%s' to '%s'", $from, $to);
+        $to->parent->mkpath;
         path($from)->copy($to);
+    }
+
+    for my $exe (@{$self->extra_exe}) {
+        my $path = $exe->{path};
+        my $subdir = $exe->{subdir};
+        my $to = $app_dir;
+        $to = $app_dir->child($subdir) if defined $subdir;
+        $to = $to->child(path($path)->basename);
+        $self->log->debugf("copying '%s' to '%s'", $path, $to);
+        $to->parent->mkpath;
+        path($path)->copy($to);
     }
 }
 

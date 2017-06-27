@@ -10,7 +10,7 @@ warn "hello!";
 my ($dir) = $0 =~ m|(.*)[/\\]| or die "unable to find loader path";
 @INC = ("$dir\\lib");
 
-$ENV{PATH} = "$dir\\bin;$ENV{PATH}";
+$ENV{PATH} = "$dir;$dir\\bin;$ENV{PATH}";
 
 my $name = $^X;
 $name =~ s|^.*[\\/]||;
