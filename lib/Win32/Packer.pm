@@ -35,20 +35,20 @@ has _OS            => ( is => 'ro',
                         isa => sub { $_[0] =~ /^MSWin32/i or croak "Unsupported OS" },
                         default => sub { $^O } );
 has log            => ( is => 'ro', default => sub { Log::Any->get_logger } );
-has extra_modules  => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
+has extra_module   => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
 has extra_inc      => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
 has scripts        => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] },
                         isa => sub { @{$_[0]} > 0 or croak "scripts argument missing" } );
 has extra_exe      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
-has extra_dll      => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
+has extra_dll      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
+has extra_dir      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
 has work_dir       => ( is => 'lazy', coerce => \&__mkpath, isa => \&__assert_dir );
 has perl_exe       => ( is => 'lazy', isa => \&__assert_file,
                         default => sub { path($^X)->realpath } );
 has strawberry     => ( is => 'lazy', isa => \&__assert_dir );
 has windows        => ( is => 'lazy', isa => \&__assert_dir,
                         default => \&__windows_directory );
-has inc            => ( is => 'lazy', coerce => \&__to_list,
-                        default => sub { [@{shift->extra_inc}, @INC] });
+has inc            => ( is => 'lazy', coerce => \&__to_list );
 has scan_deps_opts => ( is => 'ro', default => sub { {} } );
 has thick_scan     => ( is => 'ro', coerce => \&__to_bool );
 has cache          => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir) ;
@@ -60,22 +60,36 @@ has _app_dir       => ( is => 'lazy', coerce => \&__mkpath,
 has keep_work_dir  => ( is => 'ro', coerce => \&__to_bool, default => sub { 0 } );
 has output_dir     => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir,
                         default => sub { path('.')->realpath->stringify } );
-
 has cc_exe         => ( is => 'lazy', isa => \&__assert_file );
 has ld_exe         => ( is => 'lazy', isa => \&__assert_file );
-
 has strawberry_c_bin => ( is => 'lazy', isa => \&__assert_dir );
-
+has cygpath        => ( is => 'lazy', isa => \&__assert_file );
 has cygwin         => ( is => 'lazy', isa => \&__assert_dir );
-
+has cygwin_bin     => ( is => 'lazy', isa => \&__assert_dir );
 has system_drive   => ( is => 'lazy', isa => \&__assert_dir,
                         default => sub { $ENV{SystemDrive} // 'C://' } );
+has search_path    => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
 
-has cygpath        => ( is => 'lazy', isa => \&__assert_file );
+sub _build_inc {
+    my $self = shift;
+    [ @{$self->extra_inc}, @INC ]
+}
 
+sub _build_cygwin_bin {
+    my $self = shift;
+    path($self->cygwin)->child('bin')->stringify;
+}
 
 sub _build_cygwin {
     my $self = shift;
+
+    my $cygpath = $self->{cygpath} // 'cygpath';
+    my ($rc, $out, $err) = $self->_run_cmd($cygpath, -w => '/');
+    if ($rc) {
+        my $cygwin = $out;
+        chomp $cygwin;
+        return $cygwin if -d $cygwin;
+    }
 
     require Win32::TieRegistry;
     my %reg;
@@ -191,14 +205,14 @@ sub _scan_deps {
     my $self = shift;
 
     $self->log->info("Calculating dependencies...");
-    $self->log->tracef("inc: %s, extra modules: %s, scripts: %s", $self->inc, $self->extra_modules, $self->scripts);
+    $self->log->tracef("inc: %s, extra modules: %s, scripts: %s", $self->inc, $self->extra_module, $self->scripts);
     my $rv = do {
         local @Module::ScanDeps::IncludeLibs = @{$self->inc};
 
         my @pm_files = map {
             Module::ScanDeps::_find_in_inc($self->_module2path($_))
                     or $self->_die("module $_ not found")
-                } @{$self->extra_modules};
+                } @{$self->extra_module};
         $self->log->debugf("pm files: %s", \@pm_files);
 
         my @script_files = map $_->{path}, @{$self->scripts};
@@ -253,16 +267,29 @@ sub _push_pe_dependencies {
     }
 }
 
+my %xs_dll_search_path_method = map { $_ => "_${_}_xs_dll_search_path" } map lc, qw(Wx);
+
 sub _scan_xs_dll_deps {
     my ($self, $pe_deps, $pm_deps) = @_;
 
     $self->log->info("Looking for DLL dependencies for XS modules");
 
     for my $dep (values %$pm_deps) {
-        if ($dep->{key} =~ /\.xs\.dll$/i) {
-            $self->log->debug("looking for '$dep->{file}' DLL dependencies");
+        if ($dep->{key} =~ m{\.xs\.dll$}i) {
+            $self->log->debugf("looking for '%s' ('%s') DLL dependencies", $dep->{used_by}[0], $dep->{key});
+            my @search_path = @{$self->search_path};
+            if (my ($name) = $dep->{used_by}[0] =~ m{(.*)\.pm$}i) {
+                if (defined (my $method = $xs_dll_search_path_method{lc $name})) {
+                    my @special = $self->$method;
+                    $self->log->debugf("using special search path: %s", \@special);
+                    push @search_path, @special;
+                }
+            }
             my $file = path($dep->{file})->realpath;
-            my $dt = pe_dependencies($file);
+            my $dt = do {
+                local $ENV{PATH} = join(';', @search_path, $ENV{PATH}) if @search_path;
+                pe_dependencies($file)
+            };
             $self->_push_pe_dependencies($pe_deps, $dt);
         }
     }
@@ -281,9 +308,14 @@ sub _scan_exe_dll_deps {
         my $path = $exe->{path};
         my $subdir = $exe->{subdir};
 
-        my $parent = path($path)->parent;
+        my @search_path = ( path($path)->parent->stringify,
+                            @{__to_list($exe->{search_path})} );
+        push @search_path, $self->cygwin_bin if $exe->{cygwin};
+        push @search_path, @{$self->search_path};
+
         my $dt = do {
-            local $ENV{PATH} = "$parent;$ENV{PATH}";
+            local $ENV{PATH} = join(';', @search_path, $ENV{PATH});
+            # $self->log->tracef("PATH: %s", $ENV{PATH});
             pe_dependencies($path)
         };
         $self->_push_pe_dependencies($pe_deps, $dt, $subdir);
@@ -362,6 +394,34 @@ sub _populate_app_dir {
         $to->parent->mkpath;
         path($path)->copy($to);
     }
+
+    for my $dir (@{$self->extra_dir}) {
+        my $path = path($dir->{path});
+        my $subdir = $dir->{subdir} // $path->realpath->basename;
+        $self->_dir_copy($path, path($app_dir)->child($subdir));
+    }
+}
+
+sub _dir_copy {
+    my ($self, $from, $to) = @_;
+    $from = path($from);
+    $to = path($to);
+
+    $self->log->debugf("copying directory '%s' to '%s'", $from, $to);
+
+    $to->mkpath;
+    for my $c ($from->children) {
+        if ($c->is_dir) {
+            $self->_dir_copy($c, $to->child($c->basename));
+        }
+        elsif ($c->is_file) {
+            $self->log->debugf("copying '%s' to '%s'", $c, $to);
+            $c->copy($to);
+        }
+        else {
+            $self->log->warnf("unable to copy file system object '%s'", $from);
+        }
+    }
 }
 
 sub _wrapper_dir {
@@ -422,8 +482,37 @@ sub _run_cmd {
     my ($out, $err, $rc) = capture {
         system @cmd;
     };
-    $self->log->debugf("command rc: %s, out: %s, err: %s", $rc, $out, $err);
+    $self->log->debugf("command rc: %s, out: %s, err: %s", $rc, \$out, \$err);
     wantarray ? (($rc == 0), $out, $err) : ($rc == 0)
+}
+
+# special search paths
+sub _wx_xs_dll_search_path {
+    my $self = shift;
+
+    my ($wxcfg) = eval {         # get_configurations doesn't work right in scalar context!!!
+        require Alien::wxWidgets;
+        Alien::wxWidgets->get_configurations();
+    };
+
+    unless (defined $wxcfg) {
+        $self->log->warnf('Unable to retrieve Alien::wxWidgets configuration: %s', $@);
+        return;
+    }
+
+    my $wxkey = $wxcfg->{key};
+    unless (defined $wxkey) {
+        $self->log->warnf('"key" entry missing from Alien::wxWidgets configuration: %s', $wxcfg);
+        return;
+    }
+    my $perl_path = path($self->strawberry)->child('perl');
+    my @search_path;
+    for (qw(site/lib vendor/lib lib)) {
+        my $wxlib = $perl_path->child($_)->child('Alien/wxWidgets')->child($wxkey)->child('lib');
+        push @search_path, $wxlib->realpath if -d $wxlib;
+    }
+    $self->log->warnf("Wx search path is empty, DLLs will be missing") unless @search_path;
+    @search_path;
 }
 
 # helper functions

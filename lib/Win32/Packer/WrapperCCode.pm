@@ -1,5 +1,10 @@
 package Win32::Packer;
 
+use strict;
+use warnings;
+
+require Path::Tiny;
+
 seek DATA, 0, 0;
 my $line_n;
 while (<DATA>) {
@@ -9,9 +14,12 @@ while (<DATA>) {
     }
 }
 
-$wrapper_c_code = do {
+my $file = Path::Tiny::path($INC{'Win32/Packer/WrapperCCode.pm'})->realpath->stringify;
+$file =~ s/(["\\])/\\$1/g;
+
+our $wrapper_c_code = do {
     local $/;
-    qq(#line $line_n "$INC{'Win32/Packer/WrapperCCode.pm'}"\n) . <DATA>
+    qq(#line $line_n "$file"\n) . <DATA>
 };
 
 1;
