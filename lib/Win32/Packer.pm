@@ -30,6 +30,7 @@ sub __assert_dir;
 sub __assert_file;
 sub __assert_file_name;
 sub __mkpath;
+sub __c_string_quote;
 
 has _OS            => ( is => 'ro',
                         isa => sub { $_[0] =~ /^MSWin32/i or croak "Unsupported OS" },
@@ -69,6 +70,11 @@ has cygwin_bin     => ( is => 'lazy', isa => \&__assert_dir );
 has system_drive   => ( is => 'lazy', isa => \&__assert_dir,
                         default => sub { $ENV{SystemDrive} // 'C://' } );
 has search_path    => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
+has icon           => ( is => 'ro', isa => \&__assert_file );
+has windres_exe    => ( is => 'lazy', isa => \&__assert_file );
+has app_type       => ( is => 'ro', default => 'console',
+                        isa => sub { $_[0] =~ /^(?:windows|console)$/
+                                         or croak "app_type must be 'windows' or 'console'" } );
 
 sub _build_inc {
     my $self = shift;
@@ -134,6 +140,13 @@ sub _config2exe {
 sub _build_cc_exe { shift->_config2exe('cc') }
 sub _build_ld_exe { shift->_config2exe('ld') }
 
+sub _build_windres_exe {
+    my $self = shift;
+    my $exe = path($self->strawberry_c_bin)->child('windres.exe')->stringify;
+    $self->log->debugf("exe for command 'windres' is '%s'", $exe);
+    $exe;
+}
+
 sub _build_work_dir {
     my $self = shift;
     my $keep = $self->keep_work_dir;
@@ -150,7 +163,7 @@ sub _build__app_dir {
     $p->realpath->stringify;
 }
 
-sub _die { croak shift->log->fatal(@_ ? join(': ', @_) : $@) }
+sub _die { croak shift->log->fatal(@_) }
 
 sub build {
     my $self = shift;
@@ -364,7 +377,7 @@ sub _populate_app_dir {
             $self->log->debugf("copying '%s' to '%s'", $path, $to);
             $path->copy($to);
 
-            my $wrapper = $self->_make_wrapper_exe($wrapper_obj, %$script);
+            my $wrapper = $self->_make_wrapper_exe($basename, $wrapper_obj, $script);
             my $wrapper_to = $app_dir->child("$basename.exe");
             $self->log->debugf("copying '%s' to '%s'", $wrapper, $wrapper_to);
             path($wrapper)->copy($wrapper_to);
@@ -449,20 +462,41 @@ sub _make_wrapper_obj {
 }
 
 sub _make_wrapper_exe {
-    my ($self, $wrapper_obj, %opts) = @_;
+    my ($self, $basename, $wrapper_obj, $script) = @_;
     my $wrapper_dir = $self->_wrapper_dir;
-    my $wrapper_exe = path($wrapper_dir)->child("wrapper.exe")->stringify;
+    my $wrapper_exe = path($wrapper_dir)->child("$basename.exe")->stringify;
+
+    my @obj = $wrapper_obj;
+
+    if (defined (my $icon = $script->{icon} // $self->icon)) {
+        -f $icon or $self->_die("Icon not found at '$icon'");
+        $icon = path($icon)->realpath->stringify;
+        my $wrapper_dir = path($self->_wrapper_dir);
+        my $wrapper_rc = $wrapper_dir->child("$basename.rc");
+        my $wrapper_rco = $wrapper_dir->child("$basename.rco");
+        $wrapper_rc->spew('2 ICON '.__c_string_quote($icon)."\n");
+        $self->_run_cmd($self->windres_exe,
+                        -J => 'rc',  -i => "$wrapper_rc",
+                        -O => 'coff', -o => "$wrapper_rco")
+            or $self->_die("unable to compile resource file '$wrapper_rc'");
+        push @obj, "$wrapper_rco";
+    }
+
+    my $app_type = $script->{app_type} // $self->app_type;
+    $app_type =~ /^(?:console|windows)$/ or $self->_die("Bad app type $app_type");
+
     my @libpth = split /\s+/, $Config{libpth};
     my $libperl = $Config{libperl};
     $libperl =~ s/^lib//i; $libperl =~ s/\.a$//i;
     $self->_run_cmd($self->ld_exe,
                     \$Config{ldflags},
-                    $wrapper_obj,
+                    "-m$app_type",
+                    @obj,
                     map("-L$_", @libpth),
                     "-l$libperl",
                     \$Config{perllibs},
                     -o => $wrapper_exe)
-        or $self->_die("unable to link '$wrapper_obj'");
+        or $self->_die("unable to link '$wrapper_exe'");
     $wrapper_exe
 }
 
@@ -544,6 +578,12 @@ sub __windows_directory {
     $fn->Call($buffer, length $buffer);
     $buffer =~ tr/\0//d;
     path($buffer)->realpath;
+}
+
+sub __c_string_quote {
+    my $str = shift;
+    $str =~ s/(["\\])/\\$1/g;
+    qq("$str")
 }
 
 1;
