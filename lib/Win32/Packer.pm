@@ -1,10 +1,10 @@
-package Win32::Packer;
+Mpackage Win32::Packer;
 
 our $VERSION = '0.01';
 
+use Moo;
+
 use 5.010;
-use strict;
-use warnings;
 use Carp;
 use Log::Any;
 use Path::Tiny;
@@ -19,37 +19,43 @@ use Win32::Packer::WrapperCCode;
 use Win32::Packer::LoadPLCode;
 our ($wrapper_c_code, $load_pl_code);
 
-use Moo;
-
 sub __to_bool;
-sub __to_list;
-sub __to_path_list;
+sub __to_array;
+sub __to_array_path;
+sub __to_loh_path; # list of hashes representing a file system element
+sub __to_aoh_path; # array of hashes...
 sub __get_windows_directory;
 sub __temp_dir;
+sub __mkpath;
+sub __c_string_quote;
 sub __assert_dir;
 sub __assert_file;
 sub __assert_file_name;
-sub __mkpath;
-sub __c_string_quote;
+sub __assert_aoh_path_file;
+sub __assert_subsystem;
 
-has _OS            => ( is => 'ro',
+
+has _OS            => ( is => 'ro', # _OS is a hack to enable compiling the module on non-windows OSs
                         isa => sub { $_[0] =~ /^MSWin32/i or croak "Unsupported OS" },
                         default => sub { $^O } );
 has log            => ( is => 'ro', default => sub { Log::Any->get_logger } );
-has extra_module   => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
-has extra_inc      => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
-has scripts        => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] },
+has extra_module   => ( is => 'ro', coerce => \&__to_array, default => sub { [] } );
+has extra_inc      => ( is => 'ro', coerce => \&__to_array_path, default => sub { [] } );
+has scripts        => ( is => 'ro', coerce => \&__to_aoh_path, default => sub { [] },
                         isa => sub { @{$_[0]} > 0 or croak "scripts argument missing" } );
-has extra_exe      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
-has extra_dll      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
-has extra_dir      => ( is => 'ro', coerce => \&__to_path_list, default => sub { [] } );
+has extra_exe      => ( is => 'ro', coerce => \&__to_aoh_path, default => sub { [] },
+                        isa => \&__assert_aoh_path_file );
+has extra_dll      => ( is => 'ro', coerce => \&__to_aoh_path, default => sub { [] },
+                        isa => \&__assert_aoh_path_file );
+has extra_dir      => ( is => 'ro', coerce => \&__to_aoh_path, default => sub { [] },
+                        isa => \&__assert_aoh_path_dir );
 has work_dir       => ( is => 'lazy', coerce => \&__mkpath, isa => \&__assert_dir );
 has perl_exe       => ( is => 'lazy', isa => \&__assert_file,
                         default => sub { path($^X)->realpath } );
 has strawberry     => ( is => 'lazy', isa => \&__assert_dir );
 has windows        => ( is => 'lazy', isa => \&__assert_dir,
                         default => \&__windows_directory );
-has inc            => ( is => 'lazy', coerce => \&__to_list );
+has inc            => ( is => 'lazy', coerce => \&__to_array_path );
 has scan_deps_opts => ( is => 'ro', default => sub { {} } );
 has cache          => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir) ;
 has clean_cache    => ( is => 'ro', coerce => \&__to_bool );
@@ -60,23 +66,54 @@ has _app_dir       => ( is => 'lazy', coerce => \&__mkpath,
 has keep_work_dir  => ( is => 'ro', coerce => \&__to_bool, default => sub { 0 } );
 has output_dir     => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir,
                         default => sub { path('.')->realpath->stringify } );
-has cc_exe         => ( is => 'lazy', isa => \&__assert_file );
-has ld_exe         => ( is => 'lazy', isa => \&__assert_file );
-has strawberry_c_bin => ( is => 'lazy', isa => \&__assert_dir );
-has cygpath        => ( is => 'lazy', isa => \&__assert_file );
-has cygwin         => ( is => 'lazy', isa => \&__assert_dir );
-has cygwin_bin     => ( is => 'lazy', isa => \&__assert_dir );
-has system_drive   => ( is => 'lazy', isa => \&__assert_dir,
+has cc_exe         => ( is => 'lazy', isa => \&__assert_file, coerce => \&path );
+has ld_exe         => ( is => 'lazy', isa => \&__assert_file, coerce => \&path );
+has strawberry_c_bin => ( is => 'lazy', isa => \&__assert_dir, coerce => \&path );
+has cygpath        => ( is => 'lazy', isa => \&__assert_file, coerce => \&path );
+has cygwin         => ( is => 'lazy', isa => \&__assert_dir, coerce => \&path );
+has cygwin_bin     => ( is => 'lazy', isa => \&__assert_dir, coerce => \&path );
+has system_drive   => ( is => 'lazy', isa => \&__assert_dir, coerce => \&path,
                         default => sub { $ENV{SystemDrive} // 'C://' } );
-has search_path    => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
-has icon           => ( is => 'ro', isa => \&__assert_file );
-has windres_exe    => ( is => 'lazy', isa => \&__assert_file );
+has search_path    => ( is => 'ro', coerce => \&__to_array_path, default => sub { [] } );
+has icon           => ( is => 'ro', isa => \&__assert_file, coerce => \&path );
+has windres_exe    => ( is => 'lazy', isa => \&__assert_file, coerce => \&path );
 has app_subsystem  => ( is => 'ro', default => 'console',
-                        isa => sub { $_[0] =~ /^(?:windows|console)$/
-                                         or croak "app_subsystem must be 'windows' or 'console'" } );
+                        isa => \&__assert_subsystem );
 
 has _pm_deps       => ( is => 'lazy' );
 has _pe_deps       => ( is => 'lazy' );
+has _wrapper_dir   => ( is => 'lazy', isa => \&__assert_dir );
+
+has _wrapper_c     => ( is => 'lazy', isa => \&__assert_file );
+has _wrapper_o     => ( is => 'lazy', isa => \&__assert_file );
+
+has _load_pl       => ( is => 'lazy', isa => \&__assert_file );
+
+has _script_wrappers => ( is => 'lazy' );
+
+around new => sub {
+    my $orig = shift;
+    my $class = shift;
+    my $self = $class->$orig(@_);
+    $self->_clean_all;
+};
+
+sub _clean_all {
+    my $self = shift;
+    if ($self->clean_cache) {
+        if (defined (my $cache = $self->cache)) {
+            $self->log->debug("deleting cache");
+            $cache->remove_tree({safe => 0, keep_root => 1});
+        }
+        else {
+            $self->warn("clean_cache is set but cache directory is not defined");
+        }
+    }
+
+    $self->log->debug("cleaning work dir");
+    eval { $self->work_dir->remove_tree({safe => 0, keep_root => 1}); 1 }
+        or $self->log->warnf("Unable to remove old working dir completely: %s", $@);
+}
 
 sub _build_inc {
     my $self = shift;
@@ -85,13 +122,13 @@ sub _build_inc {
 
 sub _build_cygwin_bin {
     my $self = shift;
-    path($self->cygwin)->child('bin')->stringify;
+    $self->cygwin->child('bin');
 }
 
 sub _build_cygwin {
     my $self = shift;
 
-    my $cygpath = $self->{cygpath} // 'cygpath';
+    my $cygpath = $self->{cygpath} // path('cygpath');
     my ($rc, $out, $err) = $self->_run_cmd($cygpath, -w => '/');
     if ($rc) {
         my $cygwin = $out;
@@ -105,7 +142,7 @@ sub _build_cygwin {
 
     for my $dir ( $reg{'HKEY_CURRENT_USER\\SOFTWARE\\Cygwin\\setup\\rootdir'},
                   $reg{'HKEY_LOCAL_MACHINE\\SOFTWARE\\Cygwin\\setup\\rootdir'},
-                  path($self->system_drive)->child('Cygwin')->stringify ) {
+                  $self->system_drive->child('Cygwin') ) {
         defined $dir and -d $dir or next;
         return $dir;
     }
@@ -115,26 +152,26 @@ sub _build_cygwin {
 
 sub _build_cygpath {
     my $self = shift;
-    path($self->cygwin)->child('bin/cygpath.exe')->stringify;
+    $self->cygwin->child('bin/cygpath.exe');
 }
 
 sub _build_strawberry {
     my $self = shift;
-    my $p = $self->perl_exe->parent->parent->parent->stringify;
+    my $p = $self->perl_exe->parent->parent->parent;
     $self->log->trace("Strawberry dir: $p");
     $p
 }
 
 sub _build_strawberry_c_bin {
     my $self = shift;
-    path($self->strawberry)->child('c/bin')->stringify;
+    $self->strawberry->child('c/bin');
 }
 
 sub _config2exe {
     my ($self, $name) = @_;
     my $base = $Config{$name};
     $base =~ s/(?:\.exe)?$/.exe/i;
-    my $exe = path($base)->absolute($self->strawberry_c_bin)->stringify;
+    my $exe = path($base)->absolute($self->strawberry_c_bin);
     $self->log->debugf("exe for command '%s' is '%s'", $name, $exe);
     $exe
 }
@@ -144,7 +181,7 @@ sub _build_ld_exe { shift->_config2exe('ld') }
 
 sub _build_windres_exe {
     my $self = shift;
-    my $exe = path($self->strawberry_c_bin)->child('windres.exe')->stringify;
+    my $exe = $self->strawberry_c_bin->child('windres.exe');
     $self->log->debugf("exe for command 'windres' is '%s'", $exe);
     $exe;
 }
@@ -152,45 +189,132 @@ sub _build_windres_exe {
 sub _build_work_dir {
     my $self = shift;
     my $keep = $self->keep_work_dir;
-    $self->log->debug("would keep work dir") if $keep;
-    my $p = Path::Tiny->tempdir("Win32-Packer-XXXXXX", CLEANUP => !$keep )->stringify;
-    $self->log->debug("work dir: $p");
-    $p
+    my $p = Path::Tiny->tempdir("Win32-Packer-XXXXXX", CLEANUP => !$keep )->realpath;
+    $self->log->debug("Work dir: $p");
+    $self->log->info("Would keep work dir '$p'") if $keep;
+    $p;
 }
 
 sub _build__app_dir {
     my $self = shift;
-    my $p = path($self->work_dir)->child('app')->child($self->app_name);
-    $p->mkpath;
-    $p->realpath->stringify;
+    __mkpath($self->work_dir->child('app')->child($self->app_name));
 }
 
 sub _die { croak shift->log->fatal(@_) }
 
-sub build {
-    my $self = shift;
+sub _new_installer_builder {
+    my ($self, $type, %opts) = @_;
+
+    $type //= 'zip';
+    $type =~ /^(?:msi|zip|dir)$/ or $self->_die("Wrong installer type '$type'");
+    my $backend = __PACKAGE__ . "::InstallerMaker::$type";
+    eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
+    $self->log->debug("Package $backend loaded");
+
+    %opts{$_} //= $self->$_ for qw(log app_name work_dir output_dir);
+
+    $backend->_new(%opts);
+}
+
+sub installer_builder {
+    my ($self, $type, %opts) = @_;
 
     $self->log->tracef("Win32::Packer object before build: %s", $self);
-    #$self->log->tracef("%INC: %s", \%INC);
 
-    $self->_clean_work_dir;
-    $self->_do_clean_cache if $self->clean_cache;
+    $type //= 'zip';
+    $type =~ /^(?:msi|zip|dir)$/ or $self->_die("Wrong installer type '$type'");
+    my $backend = __PACKAGE__ . "::Backend::$type";
+    eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
+    $self->log->debug("Package $backend loaded");
 
-    $self->_populate_app_dir
+    my $installer = $backend->new($self, %opts);
+
+    $self->_install_scripts($installer);
+    $self->_install_load_pl($installer)
+    $self->_install_wrappers($installer);
+    $self->_install_extra_exe($installer);
+    $self->_install_extra_dir($installer);
+    $self->_install_deps($installer);
+
+    $installer;
 }
 
-sub _do_clean_cache {
+sub build_installer {
     my $self = shift;
-    if (defined (my $cache = $self->cache)) {
-        $self->log->debug("deleting cache");
-        path($cache)->remove_tree({safe => 0, keep_root => 1});
-    }
-    else {
-        $self->warn("clean_cache is set but cache directory is not defined");
+    my $installer = $self->installer_maker(@_);
+    $installer->run;
+}
+
+sub _install_scripts {
+    my ($self, $installer) = @_;
+
+    $self->log->info("Adding scripts");
+    my $lib = path('lib');
+    for (@{$self->{scripts}}) {
+        my $to = $lib->child($_->{basename}.".pl");
+        $installer->add_file($_, $to);
     }
 }
 
-sub _module2path {
+sub _install_load_pl {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding load.pl");
+    $installer->add_file($self->_load_pl);
+}
+
+sub _install_wrappers {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding wrappers");
+    for (@{$self->_script_wrappers}) {
+        $installer->add_file($_);
+    }
+}
+
+sub _install_extra_exe {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding extra exe");
+    for (@{$self->extra_exe}) {
+        my $path = $_->{path};
+        my $to = $path->basename;
+        if (defined (my $subdir = $_->{subdir})) {
+            $to = $subdir->child($to)
+        }
+        $installer->add_file($path, $to);
+    }
+}
+
+sub _install_extra_dir {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding extra dir");
+    for (@{$self->extra_dir}) {
+        my $path = $_->{path};
+        my $to = $_->{subdir} // $path->realpath->basename;
+        $installer->add_dir($path, $to);
+    }
+}
+
+sub _install_pm_deps {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding pm deps");
+    my $lib = path($lib);
+    for (values %{$self->_pm_deps}) {
+        my $path = $_->{path};
+        my $to = $lib->child($dep->{key});
+        $installer->add_file($path, $to);
+    }
+}
+
+sub _install_pe_deps {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding pe deps");
+    my $pe_deps = $self->_pe_deps;
+    for my $pe (keys %$pe_deps) {
+        my $path = path($pe_deps->{$pe});
+        $installer->add_file($path, $pe);
+    }
+}
+
+sub _module2pm {
     my ($self, $mod) = @_;
     $mod =~ s/::/\//g;
     $mod =~ s{(\.\w+)?$}{$1 // '.pm'}ei;
@@ -222,17 +346,18 @@ sub _build__pm_deps {
         local @Module::ScanDeps::IncludeLibs = @{$self->inc};
 
         my @pm_files = map {
-            Module::ScanDeps::_find_in_inc($self->_module2path($_))
+            Module::ScanDeps::_find_in_inc($self->_module2pm($_))
                     or $self->_die("module $_ not found")
                 } @{$self->extra_module};
         $self->log->debugf("pm files: %s", \@pm_files);
 
-        my @script_files = map $_->{path}, @{$self->scripts};
+        my @script_files = map $_->{path}->stringify, @{$self->scripts};
         $self->log->debugf("script files: %s", \@script_files);
 
         my @more_args;
-        push @more_args, cache_file => path($self->cache)->child('module_scan_deps.cache')->stringify
-            if defined $self->cache;
+        if (defined (my $cache = $self->cache)) {
+            push @more_args, cache_file => $cache->child('module_scan_deps.cache')->stringify
+        }
 
         Module::ScanDeps::scan_deps($self->_merge_opts($self->scan_deps_opts,
                                                        recurse => 1,
@@ -244,21 +369,15 @@ sub _build__pm_deps {
     $rv
 }
 
-sub _clean_work_dir {
-    my $self = shift;
-    $self->log->debug("cleaning work dir");
-    eval { path($self->work_dir)->remove_tree({safe => 0, keep_root => 1}) };
-}
-
 sub _push_pe_dependencies {
     my ($self, $pe_deps, $dt, $subdir) = @_;
     if ($dt->{resolved}) {
         my $module = $dt->{module};
-        $module = path($subdir)->child($module)->stringify if defined $subdir;
-        my $resolved_module = $dt->{resolved_module};
+        $module = $subdir->child($module)->stringify if defined $subdir;
+        my $resolved_module = path($dt->{resolved_module});
 
         unless ($module =~ /\.(?:exe|xs\.dll)$/i or
-                path($self->windows)->subsumes($resolved_module)) {
+                $self->windows->subsumes($resolved_module)) {
             unless (defined $pe_deps->{$module}) {
                 $self->log->tracef("resolving DLL dependency %s to %s (subdir: %s)", $module, $resolved_module, $subdir);
                 $pe_deps->{$module} = $resolved_module
@@ -303,7 +422,7 @@ sub _scan_exe_dll_deps {
 
     $self->log->info("Looking for DLL dependencies for EXE and extra DLL files");
 
-    my @exes = ( @{__to_path_list($self->perl_exe)},
+    my @exes = ( __to_loh_path($self->perl_exe),
                  @{$self->extra_exe},
                  @{$self->extra_dll} );
     for my $exe (@exes) {
@@ -311,8 +430,7 @@ sub _scan_exe_dll_deps {
         my $path = $exe->{path};
         my $subdir = $exe->{subdir};
 
-        my @search_path = ( path($path)->parent->stringify,
-                            @{__to_list($exe->{search_path})} );
+        my @search_path = ($path->parent, @{$exe->{search_path}});
         push @search_path, $self->cygwin_bin if $exe->{cygwin};
         push @search_path, @{$self->search_path};
 
@@ -333,18 +451,21 @@ sub _build__pe_deps {
     $pe_deps
 }
 
+sub _build__script_wrappers {
+    my $self = shift;
+    map $self->_make_wrapper_exe($_), @{$self->{scripts}}
+}
+
 sub _populate_app_dir {
     my $self = shift;
-
-    my $app_dir = path($self->_app_dir);
 
     my $pm_deps = $self->_pm_deps;
     my $pe_deps = $self->_pe_deps;
 
+    my $app_dir = $self->_app_dir;
     $self->log->info("Populating app dir ($app_dir)...");
 
-    my $lib_dir = $app_dir->child('lib');
-    $lib_dir->mkpath;
+    my $lib_dir = __mkpath($app_dir->child('lib'));
 
     for my $dep (values %$pm_deps) {
         my $path = path($dep->{file})->realpath;
@@ -356,38 +477,32 @@ sub _populate_app_dir {
 
     my @scripts = @{$self->scripts};
     if (@scripts) {
-        my $scripts_dir = $app_dir->child('scripts');
-        $scripts_dir->mkpath;
-
-        my $wrapper_c = $self->_make_wrapper_c;
-        my $wrapper_obj = $self->_make_wrapper_obj($wrapper_c);
-
+        my $scripts_dir = __mkpath($app_dir->child('scripts'));
         for my $script (@scripts) {
-            my $path = path($script->{path})->realpath;
-            my $basename = $path->basename;
-            $basename =~ s/(?:\.\w+)?$//;
+            my $path = $script->{path};
+            my $basename = $script->{basename};
             my $to = $scripts_dir->child("$basename.pl");
             $self->log->debugf("copying '%s' to '%s'", $path, $to);
             $path->copy($to);
 
-            my $wrapper = $self->_make_wrapper_exe($basename, $wrapper_obj, $script);
+            my $wrapper = $self->_make_wrapper_exe($script);
             my $wrapper_to = $app_dir->child("$basename.exe");
             $self->log->debugf("copying '%s' to '%s'", $wrapper, $wrapper_to);
-            path($wrapper)->copy($wrapper_to);
+            $wrapper->copy($wrapper_to);
         }
 
         my $load_pl = $self->_make_load_pl;
         my $to = $app_dir->child('load.pl');
         $self->log->debugf("copying '%s' to '%s'", $load_pl, $to);
-        path($load_pl)->copy($to);
+        $load_pl->copy($to);
     }
 
     for my $dll (keys %$pe_deps) {
-        my $from = $pe_deps->{$dll};
+        my $from = path($pe_deps->{$dll});
         my $to = $app_dir->child($dll);
         $self->log->debugf("copying '%s' to '%s'", $from, $to);
         $to->parent->mkpath;
-        path($from)->copy($to);
+        $from->copy($to);
     }
 
     for my $exe (@{$self->extra_exe}) {
@@ -400,16 +515,16 @@ sub _populate_app_dir {
 
         my $to = $app_dir;
         $to = $app_dir->child($subdir) if defined $subdir;
-        $to = $to->child(path($path)->basename);
+        $to = $to->child($path->basename);
         $self->log->debugf("copying '%s' to '%s'", $path, $to);
         $to->parent->mkpath;
-        path($path)->copy($to);
+        $path->copy($to);
     }
 
     for my $dir (@{$self->extra_dir}) {
-        my $path = path($dir->{path});
+        my $path = $dir->{path};
         my $subdir = $dir->{subdir} // $path->realpath->basename;
-        $self->_dir_copy($path, path($app_dir)->child($subdir));
+        $self->_dir_copy($path, $app_dir->child($subdir));
     }
 }
 
@@ -420,7 +535,7 @@ sub _change_exe_subsystem {
     $self->log->trace("Changing '$path' subsystem to $subsystem");
 
     require Win32::Exe;
-    my $e = Win32::Exe->new($path) // $self->_die("Unable to inspect '$path': $^E");
+    my $e = Win32::Exe->new("$path") // $self->_die("Unable to inspect '$path': $^E");
 
     if ($subsystem eq $e->get_subsystem) {
         $self->log->debug("App '$path' has already subsystem $subsystem");
@@ -437,23 +552,20 @@ sub _change_exe_subsystem {
         $self->_die("Unsupoprted Windows subsystem $subsystem");
     }
 
-    my $tmpdir = path($self->work_dir)->child('modexe');
+    my $tmpdir = $self->work_dir->child('modexe');
     if (defined (my $subdir = $exe->{subdir})) {
         $tmpdir = $tmpdir->child($subdir)
     }
     $tmpdir->mkpath;
 
-    my $mod = $tmpdir->child(path($path)->basename)->stringify;
-    $e->write($mod);
+    my $mod = $tmpdir->child($path->basename);
+    $e->write("$mod");
     $self->log->debug("App subsystem for '$path' changed to $subsystem ($mod)");
     $mod;
 }
 
 sub _dir_copy {
     my ($self, $from, $to) = @_;
-    $from = path($from);
-    $to = path($to);
-
     $self->log->debugf("copying directory '%s' to '%s'", $from, $to);
 
     $to->mkpath;
@@ -471,50 +583,45 @@ sub _dir_copy {
     }
 }
 
-sub _wrapper_dir {
-    my $self = shift;
-    my $wd = path($self->work_dir)->child('wrapper');
-    $wd->mkpath;
-    $wd->realpath->stringify
-}
+sub _build__wrapper_dir { __mkpath(shift->work_dir->child('wrapper'))->realpath }
 
-sub _make_wrapper_c {
-    my $self = shift;
-    my $wrapper_dir = $self->_wrapper_dir;
-    my $p = path($wrapper_dir)->child("wrapper.c");
+sub _build__wrapper_c {
+    my $p = shift->_wrapper_dir->child("wrapper.c");
     $p->spew($wrapper_c_code);
-    $p->realpath->stringify;
+    $p
 }
 
-sub _make_wrapper_obj {
+sub _build__wrapper_o {
     my ($self, $wrapper_c) = @_;
-    my $wrapper_dir = $self->_wrapper_dir;
-    my $wrapper_obj = path($wrapper_dir)->child("wrapper.obj")->stringify;
-    $self->_run_cmd($self->cc_exe, "-I$Config{archlibexp}/CORE", \$Config{ccflags}, '-c', $wrapper_c, '-o', $wrapper_obj)
+    my $wrapper_o = $self->_wrapper_dir->child("wrapper.obj");
+    $self->_run_cmd($self->cc_exe, "-I$Config{archlibexp}/CORE", \$Config{ccflags}, '-c', $self->_wrapper_c, '-o', $wrapper_o)
         or $self->_die("unable to compile '$wrapper_c'");
-    $wrapper_obj
+    $wrapper_o
 }
 
-sub _make_wrapper_exe {
-    my ($self, $basename, $wrapper_obj, $script) = @_;
-    my $wrapper_dir = $self->_wrapper_dir;
-    my $wrapper_exe = path($wrapper_dir)->child("$basename.exe")->stringify;
-
-    my @obj = $wrapper_obj;
-
+sub _make_wrapper_rco {
+    my ($self, $script) = @_;
     if (defined (my $icon = $script->{icon} // $self->icon)) {
-        -f $icon or $self->_die("Icon not found at '$icon'");
-        $icon = path($icon)->realpath->stringify;
-        my $wrapper_dir = path($self->_wrapper_dir);
-        my $wrapper_rc = $wrapper_dir->child("$basename.rc");
-        my $wrapper_rco = $wrapper_dir->child("$basename.rco");
-        $wrapper_rc->spew('2 ICON '.__c_string_quote($icon)."\n");
+        $icon->is_file or $self->_die("Icon not found at '$icon'");
+        my $basename = $script->{basename};
+        my $wrapper_rc = $self->_wrapper_dir->child("$basename.rc");
+        my $wrapper_rco = $self->_wrapper_dir->child("$basename.rco");
+        $wrapper_rc->spew('2 ICON '.__c_string_quote($icon->realpath)."\n");
         $self->_run_cmd($self->windres_exe,
                         -J => 'rc',  -i => "$wrapper_rc",
                         -O => 'coff', -o => "$wrapper_rco")
             or $self->_die("unable to compile resource file '$wrapper_rc'");
-        push @obj, "$wrapper_rco";
+        return $wrapper_rco;
     }
+    return ()
+}
+
+sub _make_wrapper_exe {
+    my ($self, $script) = @_;
+    my $basename = $script->{basename};
+    my $wrapper_exe = $self->_wrapper_dir->child("$basename.exe");
+
+    my @obj = ($self->_wrapper_o, $self->_make_wrapper_rco($script));
 
     my $app_subsystem = $script->{app_subsystem} // $self->app_subsystem;
     $app_subsystem =~ /^(?:console|windows)$/ or $self->_die("Bad app type $app_subsystem");
@@ -534,13 +641,12 @@ sub _make_wrapper_exe {
     $wrapper_exe
 }
 
-sub _make_load_pl {
+sub _build__load_pl {
     my $self = shift;
-    my $wrapper_dir = $self->_wrapper_dir;
-    my $p = path($wrapper_dir)->child("load.pl");
+    my $p = $self->_wrapper_dir->child("load.pl");
     $p->spew($load_pl_code);
     $self->log->debug("load.pl saved to $p");
-    $p->realpath->stringify;
+    $p
 }
 
 sub _run_cmd {
@@ -573,7 +679,7 @@ sub _wx_xs_dll_search_path {
         $self->log->warnf('"key" entry missing from Alien::wxWidgets configuration: %s', $wxcfg);
         return;
     }
-    my $perl_path = path($self->strawberry)->child('perl');
+    my $perl_path = $self->strawberry->child('perl');
     my @search_path;
     for (qw(site/lib vendor/lib lib)) {
         my $wxlib = $perl_path->child($_)->child('Alien/wxWidgets')->child($wxkey)->child('lib');
@@ -584,27 +690,48 @@ sub _wx_xs_dll_search_path {
 }
 
 # helper functions
-sub __assert_file { -f $_[0] or croak "$_[0] is not a file" }
+sub __assert_file { $_[0]->is_file or croak "$_[0] is not a file" }
 sub __assert_file_name { $_[0] =~ tr{<>:"/\\|?*}{} and croak "$_[0] is not a valid Windows file name" }
-sub __assert_dir  { -d $_[0] or croak "$_[0] is not a directory" }
+sub __assert_dir  { $_[0]->is_dir or croak "$_[0] is not a directory" }
+
+sub __assert_aoh_path_file { $_->{path}->is_file or croak "$_ is not a file" for @{$_[0]} }
+sub __assert_aoh_path_dir { $_->{path}->is_dir or croak "$_ is not a directory" for @{$_[0]} }
+
+sub __assert_subsystem {
+    $_[0] =~ /^(?:windows|console)$/
+        or croak "app_subsystem must be 'windows' or 'console'";
+}
+
 sub __mkpath {
-    my $p = path($_[0])->realpath;
+    my $p = path(shift);
     $p->mkpath;
-    "$p"
+    $p
 }
 
 sub __to_bool { $_[0] ? 1 : 0 }
 sub __to_list {
-    return $_[0] if ref $_[0] eq 'ARRAY';
-    return [$_[0]] if defined $_[0];
-    []
+    return @{$_[0]} if ref $_[0] eq 'ARRAY';
+    return $_[0] if defined $_[0];
+    ()
 }
-sub __to_path_list {
-    my $arg = shift;
-    my @list = (ref $arg eq 'ARRAY' ? @$arg :
-                defined $arg        ? $arg  : ());
-    [ map { ref $_ eq 'HASH' ? { %$_ } : { path => $_ } } @list ]
+
+sub __to_array { [__to_list(shift)] }
+
+sub __to_array_path { [map path($_), __to_list(shift)] }
+
+sub __to_loh_path {
+    map {
+        my %h = (ref eq 'HASH' ? %$_ : (path => $_));
+        defined and $_ = path($_) for @h{qw(path subdir icon)};
+        $_ = __to_array_path($_) for @h{qw(search_path)};
+        $h{basename} //= $h{path}->basename(qw/\.\w*/);
+        __assert_subsystem($h{subsystem}) if defined $h{subsystem};
+        \%h
+    } __to_list(shift)
 }
+
+sub __to_aoh_path { [ __to_loh_path(shift) ] } 
+
 sub __windows_directory {
     require Win32::API;
     state $fn = Win32::API->new("KERNEL32","GetWindowsDirectoryA","PN","N");
