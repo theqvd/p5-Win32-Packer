@@ -51,7 +51,6 @@ has windows        => ( is => 'lazy', isa => \&__assert_dir,
                         default => \&__windows_directory );
 has inc            => ( is => 'lazy', coerce => \&__to_list );
 has scan_deps_opts => ( is => 'ro', default => sub { {} } );
-has thick_scan     => ( is => 'ro', coerce => \&__to_bool );
 has cache          => ( is => 'ro', coerce => \&__mkpath, isa => \&__assert_dir) ;
 has clean_cache    => ( is => 'ro', coerce => \&__to_bool );
 has app_name       => ( is => 'ro', default => sub { 'PerlApp' },
@@ -75,6 +74,9 @@ has windres_exe    => ( is => 'lazy', isa => \&__assert_file );
 has app_subsystem  => ( is => 'ro', default => 'console',
                         isa => sub { $_[0] =~ /^(?:windows|console)$/
                                          or croak "app_subsystem must be 'windows' or 'console'" } );
+
+has _pm_deps       => ( is => 'lazy' );
+has _pe_deps       => ( is => 'lazy' );
 
 sub _build_inc {
     my $self = shift;
@@ -173,11 +175,8 @@ sub build {
 
     $self->_clean_work_dir;
     $self->_do_clean_cache if $self->clean_cache;
-    my $pm_deps = $self->_scan_deps;
 
-    my $pe_deps = $self->_scan_dll_deps($pm_deps);
-
-    $self->_populate_app_dir($pm_deps, $pe_deps);
+    $self->_populate_app_dir
 }
 
 sub _do_clean_cache {
@@ -214,7 +213,7 @@ sub _merge_opts {
     %opts
 }
 
-sub _scan_deps {
+sub _build__pm_deps {
     my $self = shift;
 
     $self->log->info("Calculating dependencies...");
@@ -241,15 +240,7 @@ sub _scan_deps {
                                                        files => [@script_files, @pm_files],
                                                        @more_args));
     };
-
-    if ($self->thick_scan) {
-        $self->_die('Thick scan nimplemented');
-    }
-
-    $self->log->debugf("dependencies: %s", $rv);
-
-    # print STDERR Data::Dumper::Dumper($rv);
-
+    $self->log->debugf("pm dependencies: %s", $rv);
     $rv
 }
 
@@ -283,11 +274,10 @@ sub _push_pe_dependencies {
 my %xs_dll_search_path_method = map { $_ => "_${_}_xs_dll_search_path" } map lc, qw(Wx);
 
 sub _scan_xs_dll_deps {
-    my ($self, $pe_deps, $pm_deps) = @_;
-
+    my ($self, $pe_deps) = @_;
     $self->log->info("Looking for DLL dependencies for XS modules");
 
-    for my $dep (values %$pm_deps) {
+    for my $dep (values %{$self->_pm_deps}) {
         if ($dep->{key} =~ m{\.xs\.dll$}i) {
             $self->log->debugf("looking for '%s' ('%s') DLL dependencies", $dep->{used_by}[0], $dep->{key});
             my @search_path = @{$self->search_path};
@@ -335,18 +325,21 @@ sub _scan_exe_dll_deps {
     }
 }
 
-sub _scan_dll_deps {
-    my ($self, $pm_deps) = @_;
+sub _build__pe_deps {
+    my $self = shift;
     my $pe_deps = {};
-    $self->_scan_xs_dll_deps($pe_deps, $pm_deps);
+    $self->_scan_xs_dll_deps($pe_deps);
     $self->_scan_exe_dll_deps($pe_deps);
     $pe_deps
 }
 
 sub _populate_app_dir {
-    my ($self, $pm_deps, $pe_deps) = @_;
+    my $self = shift;
 
     my $app_dir = path($self->_app_dir);
+
+    my $pm_deps = $self->_pm_deps;
+    my $pe_deps = $self->_pe_deps;
 
     $self->log->info("Populating app dir ($app_dir)...");
 
