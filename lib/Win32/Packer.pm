@@ -72,9 +72,9 @@ has system_drive   => ( is => 'lazy', isa => \&__assert_dir,
 has search_path    => ( is => 'ro', coerce => \&__to_list, default => sub { [] } );
 has icon           => ( is => 'ro', isa => \&__assert_file );
 has windres_exe    => ( is => 'lazy', isa => \&__assert_file );
-has app_type       => ( is => 'ro', default => 'console',
+has app_subsystem  => ( is => 'ro', default => 'console',
                         isa => sub { $_[0] =~ /^(?:windows|console)$/
-                                         or croak "app_type must be 'windows' or 'console'" } );
+                                         or croak "app_subsystem must be 'windows' or 'console'" } );
 
 sub _build_inc {
     my $self = shift;
@@ -400,6 +400,11 @@ sub _populate_app_dir {
     for my $exe (@{$self->extra_exe}) {
         my $path = $exe->{path};
         my $subdir = $exe->{subdir};
+
+        if (defined(my $subsystem = $exe->{subsystem})) {
+            $path = $self->_change_exe_subsystem($exe, $subsystem);
+        }
+
         my $to = $app_dir;
         $to = $app_dir->child($subdir) if defined $subdir;
         $to = $to->child(path($path)->basename);
@@ -413,6 +418,42 @@ sub _populate_app_dir {
         my $subdir = $dir->{subdir} // $path->realpath->basename;
         $self->_dir_copy($path, path($app_dir)->child($subdir));
     }
+}
+
+sub _change_exe_subsystem {
+    my ($self, $exe, $subsystem) = @_;
+
+    my $path = $exe->{path};
+    $self->log->trace("Changing '$path' subsystem to $subsystem");
+
+    require Win32::Exe;
+    my $e = Win32::Exe->new($path) // $self->_die("Unable to inspect '$path': $^E");
+
+    if ($subsystem eq $e->get_subsystem) {
+        $self->log->debug("App '$path' has already subsystem $subsystem");
+        return $path
+    }
+
+    if ($subsystem eq 'console') {
+        $e->set_subsystem_console
+    }
+    elsif ($subsystem eq 'windows') {
+        $e->set_subsystem_windows
+    }
+    else {
+        $self->_die("Unsupoprted Windows subsystem $subsystem");
+    }
+
+    my $tmpdir = path($self->work_dir)->child('modexe');
+    if (defined (my $subdir = $exe->{subdir})) {
+        $tmpdir = $tmpdir->child($subdir)
+    }
+    $tmpdir->mkpath;
+
+    my $mod = $tmpdir->child(path($path)->basename)->stringify;
+    $e->write($mod);
+    $self->log->debug("App subsystem for '$path' changed to $subsystem ($mod)");
+    $mod;
 }
 
 sub _dir_copy {
@@ -482,15 +523,15 @@ sub _make_wrapper_exe {
         push @obj, "$wrapper_rco";
     }
 
-    my $app_type = $script->{app_type} // $self->app_type;
-    $app_type =~ /^(?:console|windows)$/ or $self->_die("Bad app type $app_type");
+    my $app_subsystem = $script->{app_subsystem} // $self->app_subsystem;
+    $app_subsystem =~ /^(?:console|windows)$/ or $self->_die("Bad app type $app_subsystem");
 
     my @libpth = split /\s+/, $Config{libpth};
     my $libperl = $Config{libperl};
     $libperl =~ s/^lib//i; $libperl =~ s/\.a$//i;
     $self->_run_cmd($self->ld_exe,
                     \$Config{ldflags},
-                    "-m$app_type",
+                    "-m$app_subsystem",
                     @obj,
                     map("-L$_", @libpth),
                     "-l$libperl",
