@@ -22,6 +22,8 @@ use Win32::Packer::LoadPLCode;
 our ($wrapper_c_code, $load_pl_code);
 
 use Moo;
+use namespace::autoclean;
+
 extends 'Win32::Packer::Base';
 
 has _OS            => ( is => 'ro', # _OS is a hack to enable compiling the module on non-windows OSs
@@ -177,35 +179,21 @@ sub _build_work_dir {
     $p;
 }
 
-sub _build__app_dir {
-    my $self = shift;
-    mkpath($self->work_dir->child('app')->child($self->app_name));
-}
-
-sub _die { croak shift->log->fatal(@_) }
-
-sub _new_installer_builder {
-    my ($self, $type, %opts) = @_;
-
-    $type //= 'zip';
-    $type =~ /^(?:msi|zip|dir)$/ or $self->_die("Wrong installer type '$type'");
-    my $backend = __PACKAGE__ . "::InstallerMaker::$type";
-    eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
-    $self->log->debug("Package $backend loaded");
-
-    $opts{$_} //= $self->$_ for qw(log app_name work_dir output_dir);
-
-    $backend->_new(%opts);
-}
-
 sub _new_installer_maker {
-    my ($self, $type, %opts) = @_;
+    my $self = shift;
+    my %opts = ((@_ & 1) ? (type => @_) : @_);
 
-    $type //= 'zip';
+    my $type = delete $opts{type} // 'zip';
     $type =~ /^(?:msi|zip|dir)$/ or $self->_die("Wrong installer type '$type'");
     my $backend = __PACKAGE__ . "::InstallerMaker::$type";
     eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
     $self->log->debug("Package $backend loaded");
+
+    for (qw(log app_name app_version work_dir output_dir)) {
+        if (defined (my $v = $self->$_)) {
+            $opts{$_} //= $v
+        }
+    }
 
     $backend->new(%opts);
 }
@@ -238,7 +226,7 @@ sub _install_scripts {
     my $lib = path('lib');
     for (@{$self->scripts}) {
         my $to = $lib->child($_->{basename}.'.pl');
-        $installer->add_file($_, $to);
+        $installer->add_file($_->{path}, $to);
     }
 }
 
@@ -440,78 +428,6 @@ sub _build__pe_deps {
 sub _build__script_wrappers {
     my $self = shift;
     [ map $self->_make_wrapper_exe($_), @{$self->{scripts}} ]
-}
-
-sub _populate_app_dir {
-    my $self = shift;
-
-    my $pm_deps = $self->_pm_deps;
-    my $pe_deps = $self->_pe_deps;
-
-    my $app_dir = $self->_app_dir;
-    $self->log->info("Populating app dir ($app_dir)...");
-
-    my $lib_dir = mkpath($app_dir->child('lib'));
-
-    for my $dep (values %$pm_deps) {
-        my $path = path($dep->{file})->realpath;
-        my $to = $lib_dir->child($dep->{key});
-        $self->log->debugf("copying '%s' to '%s'", $path, $to);
-        $to->parent->mkpath;
-        $path->copy($to);
-    }
-
-    my @scripts = @{$self->scripts};
-    if (@scripts) {
-        my $scripts_dir = mkpath($app_dir->child('scripts'));
-        for my $script (@scripts) {
-            my $path = $script->{path};
-            my $basename = $script->{basename};
-            my $to = $scripts_dir->child("$basename.pl");
-            $self->log->debugf("copying '%s' to '%s'", $path, $to);
-            $path->copy($to);
-
-            my $wrapper = $self->_make_wrapper_exe($script);
-            my $wrapper_to = $app_dir->child("$basename.exe");
-            $self->log->debugf("copying '%s' to '%s'", $wrapper, $wrapper_to);
-            $wrapper->copy($wrapper_to);
-        }
-
-        my $load_pl = $self->_make_load_pl;
-        my $to = $app_dir->child('load.pl');
-        $self->log->debugf("copying '%s' to '%s'", $load_pl, $to);
-        $load_pl->copy($to);
-    }
-
-    for my $dll (keys %$pe_deps) {
-        my $from = path($pe_deps->{$dll});
-        my $to = $app_dir->child($dll);
-        $self->log->debugf("copying '%s' to '%s'", $from, $to);
-        $to->parent->mkpath;
-        $from->copy($to);
-    }
-
-    for my $exe (@{$self->extra_exe}) {
-        my $path = $exe->{path};
-        my $subdir = $exe->{subdir};
-
-        if (defined(my $subsystem = $exe->{subsystem})) {
-            $path = $self->_change_exe_subsystem($exe, $subsystem);
-        }
-
-        my $to = $app_dir;
-        $to = $app_dir->child($subdir) if defined $subdir;
-        $to = $to->child($path->basename);
-        $self->log->debugf("copying '%s' to '%s'", $path, $to);
-        $to->parent->mkpath;
-        $path->copy($to);
-    }
-
-    for my $dir (@{$self->extra_dir}) {
-        my $path = $dir->{path};
-        my $subdir = $dir->{subdir} // $path->realpath->basename;
-        $self->_dir_copy($path, $app_dir->child($subdir));
-    }
 }
 
 sub _change_exe_subsystem {

@@ -9,7 +9,7 @@ use Path::Tiny;
 use Exporter qw(import);
 our @EXPORT_OK = grep { no strict 'refs'; defined *{$_}{CODE} } keys %{Win32::Packer::Helpers::};
 
-use Data::Dumper; warn Dumper(\@EXPORT_OK);
+#use Data::Dumper; warn Dumper(\@EXPORT_OK);
 
 sub assert_file { $_[0]->is_file or croak "$_[0] is not a file" }
 sub assert_file_name { $_[0] =~ tr{<>:"/\\|?*}{} and croak "$_[0] is not a valid Windows file name" }
@@ -45,7 +45,7 @@ sub to_loh_path {
         my %h = (ref eq 'HASH' ? %$_ : (path => $_));
         defined and $_ = path($_) for @h{qw(path subdir icon)};
         $_ = to_array_path($_) for @h{qw(search_path)};
-        $h{basename} //= $h{path}->basename(qw/\.\w*/);
+        $h{basename} //= $h{path}->basename(qr/\.\w*/);
         assert_subsystem($h{subsystem}) if defined $h{subsystem};
         \%h
     } to_list(shift)
@@ -66,6 +66,13 @@ sub c_string_quote {
     my $str = shift;
     $str =~ s/(["\\])/\\$1/g;
     qq("$str")
+}
+
+sub fn_maybe_add_extension {
+    my ($fn, $ext) = @_;
+    $ext =~ s/^\.*/./;
+    $fn =~ s/\Q$ext\E$//;
+    "$fn$ext"
 }
 
 1;

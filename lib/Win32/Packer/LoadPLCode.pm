@@ -16,7 +16,7 @@ my $name = $^X;
 $name =~ s|^.*[\\/]||;
 $name =~ s|\.exe$|.pl| or die "Unable to infer script name";
 
-my $script = "$dir\\scripts\\$name";
+my $script = "$dir\\lib\\$name";
 
 my $rc = do $script;
 
