@@ -7,7 +7,7 @@ use Carp;
 use Path::Tiny;
 
 use Exporter qw(import);
-our @EXPORT_OK = grep { no strict 'refs'; defined *{$_}{CODE} } keys %{Win32::Packer::Helpers::};
+our @EXPORT_OK = grep { no strict 'refs'; /^[a-z]/i and defined *{$_}{CODE} } keys %{Win32::Packer::Helpers::};
 
 #use Data::Dumper; warn Dumper(\@EXPORT_OK);
 
@@ -73,6 +73,24 @@ sub fn_maybe_add_extension {
     $ext =~ s/^\.*/./;
     $fn =~ s/\Q$ext\E$//;
     "$fn$ext"
+}
+
+sub _w32q {
+    my $arg = shift;
+    for ($arg) {
+        $_ eq '' and return '""';
+        if (/[ \t\n\x0b"]/) {
+            s{(\\+)(?="|\z)}{$1$1}g;
+            s{"}{\\"}g;
+            return qq("$_")
+        }
+        return $_
+    }
+}
+
+sub win32_cmd_quote {
+    my @r = map _w32q($_), @_;
+    wantarray ? @r : $r[0];
 }
 
 1;

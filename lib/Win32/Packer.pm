@@ -184,7 +184,7 @@ sub _new_installer_maker {
     my %opts = ((@_ & 1) ? (type => @_) : @_);
 
     my $type = delete $opts{type} // 'zip';
-    $type =~ /^(?:msi|zip|dir)$/ or $self->_die("Wrong installer type '$type'");
+    $type =~ /^(?:msi|zip|dir|dirbat)$/ or $self->_die("Wrong installer type '$type'");
     my $backend = __PACKAGE__ . "::InstallerMaker::$type";
     eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
     $self->log->debug("Package $backend loaded");
