@@ -74,6 +74,8 @@ has _load_pl       => ( is => 'lazy', isa => \&assert_file );
 
 has _script_wrappers => ( is => 'lazy' );
 
+has _extra_exe_mod => ( is => 'lazy');
+
 around new => sub {
     my $orig = shift;
     my $class = shift;
@@ -97,6 +99,22 @@ sub _clean_all {
     $self->log->debug("cleaning work dir");
     eval { $self->work_dir->remove_tree({safe => 0, keep_root => 1}); 1 }
         or $self->log->warnf("Unable to remove old working dir completely: %s", $@);
+}
+
+sub _build__extra_exe_mod {
+    my $self = shift;
+    my @mod;
+    for (@{$self->extra_exe}) {
+        if (defined (my $subsystem = $_->{subsystem})) {
+            my %mod = %$_;
+            $mod{path} = $self->_change_exe_subsystem($_, $subsystem);
+            push @mod, \%mod;
+        }
+        else {
+            push @mod, $_;
+        }
+    }
+    \@mod
 }
 
 sub _build_inc {
@@ -247,7 +265,7 @@ sub _install_wrappers {
 sub _install_extra_exe {
     my ($self, $installer) = @_;
     $self->log->info("Adding extra exe");
-    for (@{$self->extra_exe}) {
+    for (@{$self->_extra_exe_mod}) {
         my $path = $_->{path};
         my $to = $path->basename;
         if (defined (my $subdir = $_->{subdir})) {
@@ -451,7 +469,7 @@ sub _change_exe_subsystem {
         $e->set_subsystem_windows
     }
     else {
-        $self->_die("Unsupoprted Windows subsystem $subsystem");
+        $self->_die("Unsupported Windows subsystem $subsystem");
     }
 
     my $tmpdir = $self->work_dir->child('modexe');
