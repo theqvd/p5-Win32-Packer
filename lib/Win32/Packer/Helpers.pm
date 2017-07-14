@@ -93,4 +93,10 @@ sub win32_cmd_quote {
     wantarray ? @r : $r[0];
 }
 
+sub guid {
+    my $self = shift;
+    require Data::GUID;
+    Data::GUID->new->as_string;
+}
+
 1;

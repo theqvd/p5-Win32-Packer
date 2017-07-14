@@ -58,7 +58,6 @@ has cygwin_bin     => ( is => 'lazy', isa => \&assert_dir, coerce => \&path );
 has system_drive   => ( is => 'lazy', isa => \&assert_dir, coerce => \&path,
                         default => sub { $ENV{SystemDrive} // 'C://' } );
 has search_path    => ( is => 'ro', coerce => \&to_array_path, default => sub { [] } );
-has icon           => ( is => 'ro', isa => \&assert_file, coerce => \&path );
 has windres_exe    => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has app_subsystem  => ( is => 'ro', default => 'console',
                         isa => \&assert_subsystem );
@@ -202,12 +201,14 @@ sub _new_installer_maker {
     my %opts = ((@_ & 1) ? (type => @_) : @_);
 
     my $type = delete $opts{type} // 'zip';
-    $type =~ /^(?:msi|zip|dir|dirbat)$/ or $self->_die("Wrong installer type '$type'");
+    $type =~ s/-/_/g;
+    $type =~ /^(?:\w+)$/ or $self->_die("Wrong installer type '$type'");
     my $backend = __PACKAGE__ . "::InstallerMaker::$type";
     eval "require $backend; 1" or $self->_die("Unable to load backend '$backend': $@");
     $self->log->debug("Package $backend loaded");
 
-    for (qw(log app_name app_version work_dir output_dir)) {
+    for (qw(app_name app_version app_vendor app_id app_description app_keywords app_comments
+            icon log work_dir output_dir)) {
         if (defined (my $v = $self->$_)) {
             $opts{$_} //= $v
         }
@@ -218,6 +219,7 @@ sub _new_installer_maker {
 
 sub installer_maker {
     my $self = shift;
+
     my $installer = $self->_new_installer_maker(@_);
 
     $self->_install_scripts($installer);
@@ -246,6 +248,33 @@ sub _install_scripts {
         my $to = $lib->child($_->{basename}.'.pl');
         $installer->add_file($_->{path}, $to);
     }
+}
+
+sub store {
+    my ($self, $fn) = @_;
+    $fn //= $self->work_dir->child('store', 'packer.sto');
+    path($fn)->absolute->parent->mkpath;
+
+    $self->log->info("Saving Win32::Packer object into '$fn'");
+
+    require Storable;
+    local $self->{log}; # may have code references
+    Storable::store($self, "$fn");
+
+    $fn;
+}
+
+sub retrieve {
+    my ($class, $fn, $log) = @_;
+
+    require Storable;
+    my $self = Storable::retrieve($fn);
+
+    if (defined $log) {
+        $self->log($log);
+        $self->log->info("Win32::Packer object retrieved from '$fn'");
+    }
+    $self;
 }
 
 sub _install_load_pl {
