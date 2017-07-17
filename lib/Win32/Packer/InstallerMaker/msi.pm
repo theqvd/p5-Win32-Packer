@@ -2,7 +2,7 @@ package Win32::Packer::InstallerMaker::msi;
 
 use Win32::Packer::Helpers qw(guid);
 
-use XML::LibXML;
+use XML::FromPerl qw(xml_from_perl);
 
 use Moo;
 use namespace::autoclean;
@@ -37,58 +37,43 @@ sub _build_wxs_fn {
 sub _build__wxs {
     my $self = shift;
 
-    my $count = 0;
-    my $ns = 'http://schemas.microsoft.com/wix/2006/wi';
-    my $doc = XML::LibXML::Document->new('1.0', 'utf-8');
-
-    my $ne = sub {
-        my $name = shift;
-        my $e = $doc->createElementNS($ns, $name);
-        while (@_) {
-            my ($k, $v) = splice @_, 0, 2;
-            $e->setAttribute($k, $v) if defined $v;
-        }
-        $e
-    };
-
-    $doc->setDocumentElement(my $wxs = $ne->('Wxs'));
-    $wxs->appendChild(my $product = $ne->('Product',
-                                          Name => $self->versioned_app_name,
-                                          Id => $self->app_id,
-                                          Manufacturer => $self->app_vendor,
-                                          Version => $self->app_version,
-                                          Language => '1033', Codepage => '1252'));
-
-    $product->appendChild($ne->('Package',
-                                Description => $self->app_description,
-                                Keywords => $self->app_keywords,
-                                Comments => $self->app_comments,
+    my $data = [ Wix => { xmlns => 'http://schemas.microsoft.com/wix/2006/wi' },
+                 my $product =
+                 [ Product => { Name => $self->versioned_app_name,
+                                Id => $self->app_id,
                                 Manufacturer => $self->app_vendor,
-                                InstallerVersion => '0',
-                                Languages => '1033',
-                                Compressed => 'yes',
-                                SummaryCodepage => '1252'));
+                                Version => $self->app_version,
+                                Language => '1033', Codepage => '1252' },
+                   [ Package => { Description => $self->app_description,
+                                  Keywords => $self->app_keywords,
+                                  Comments => $self->app_comments,
+                                  Manufacturer => $self->app_vendor,
+                                  InstallerVersion => '0',
+                                  Languages => '1033',
+                                  Compressed => 'yes',
+                                  SummaryCodepage => '1252' } ],
+                   [ Media => { Id => '1', Cabinet => 'media1.cab' } ],
+                   [ Directory => { Id => 'TARGETDIR', Name => 'SourceDir' },
+                     [ Directory => { Id => 'ProgramFilesFolder', Name => 'PFiles' },
+                       my $install_dir =
+                       [ Directory => { Id => 'INSTALLDIR', Name => $self->app_name } ] ]]] ];
 
-    $product->appendChild($ne->('MediaTemplate', EmbedCab => 'yes'));
-
-    if (defined(my $icon = $self->icon)) {
-        $product->appendChild($ne->('Icon', Id => 'Icon.exe', SourceFile => $icon));
+    if (defined (my $icon = $self->icon)) {
+        push @$product, [ Icon => { Id => 'Icon.exe', SourceFile => $icon } ]
     }
 
-    $product->appendChild(my $d0 = $ne->('Directory', Id => 'TARGETDIR', Name => 'SourceDir'));
-    $d0->appendChild(my $d1 = $ne->('Directory', Id => 'ProgramFilesFolder', Name => 'PFiles'));
-    $d1->appendChild(my $d2 = $ne->('Directory', Id => 'INSTALLDIR', Name => $self->app_name));
-
+    my $count = 0;
     my $fs = $self->_fs;
     for my $to (sort keys %$fs) {
         $self->log->debug("skipping $to"), next if $to =~ m|[/\\]|;
         my $obj = $fs->{$to};
         $self->log->debug("skipping not a file $to"), next unless $obj->{type} eq 'file';
         $count++;
-        $d2->appendChild(my $c = $ne->('Component', Id => "File$count", Guid => guid));
-        $c->appendChild($ne->('File', Name => $to, Source => $obj->{path}->canonpath));
+        push @$install_dir, [ Component => { Id => "File$count", Guid => guid },
+                              [ File => { Name => $to, Source => $obj->{path}->canonpath } ] ];
     }
 
+    my $doc = xml_from_perl $data;
     my $wxs_fn = $self->wxs_fn;
     $doc->toFile($wxs_fn, 2);
     $self->log->debug("Wxs file created at '$wxs_fn'");
