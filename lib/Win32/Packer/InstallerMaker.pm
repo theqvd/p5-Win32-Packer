@@ -16,7 +16,7 @@ sub add_file {
 
     $self->log->debug("Adding file '$from' as '$to'");
 
-    $self->_add_obj($to, type => 'file', path => $from);
+    $self->_add_obj($to, @_, type => 'file', path => $from);
 }
 
 sub add_tree {
@@ -60,12 +60,14 @@ sub _add_obj_norec {
     my ($self, $to, %opts) = @_;
     my $obj = $self->_fs->{$to} //= {};
     for my $k (keys %opts) {
-        if (defined $obj->{$k}) {
-            $self->_die("fs object $to reinserted with a different value for $k: $opts{$k}, was: $obj->{$k}")
-                unless $obj->{$k} eq $opts{$k};
-        }
-        else {
-            $obj->{$k} = $opts{$k}
+        if (defined $opts{$k}) {
+            if (defined $obj->{$k}) {
+                $self->_die("fs object $to reinserted with a different value for $k: $opts{$k}, was: $obj->{$k}")
+                    unless $obj->{$k} eq $opts{$k};
+            }
+            else {
+                $obj->{$k} = $opts{$k}
+            }
         }
     }
 }

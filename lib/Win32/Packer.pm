@@ -10,7 +10,6 @@ use Module::ScanDeps;
 use Text::CSV_XS ();
 use Data::Dumper;
 use Config;
-use Capture::Tiny qw(capture);
 use Win32::Ldd qw(pe_dependencies);
 
 use Win32::Packer::Helpers qw(mkpath to_bool to_array to_array_path to_aoh_path
@@ -287,7 +286,8 @@ sub _install_wrappers {
     my ($self, $installer) = @_;
     $self->log->info("Adding wrappers");
     for (@{$self->_script_wrappers}) {
-        $installer->add_file($_);
+        $installer->add_file($_->{path}, $_->{path}->basename,
+                             shortcut => $_->{shortcut});
     }
 }
 
@@ -474,7 +474,11 @@ sub _build__pe_deps {
 
 sub _build__script_wrappers {
     my $self = shift;
-    [ map $self->_make_wrapper_exe($_), @{$self->{scripts}} ]
+    [ map {
+        my %h = ( path => $self->_make_wrapper_exe($_),
+                  shortcut => $_->{shortcut} );
+        \%h
+    } @{$self->{scripts}} ]
 }
 
 sub _change_exe_subsystem {
@@ -596,17 +600,6 @@ sub _build__load_pl {
     $p->spew($load_pl_code);
     $self->log->debug("load.pl saved to $p");
     $p
-}
-
-sub _run_cmd {
-    my $self = shift;
-    my @cmd = map { ref eq 'SCALAR' ? grep length, split /\s+/, $$_ : $_ } @_;
-    $self->log->debugf("running command: %s", \@cmd);
-    my ($out, $err, $rc) = capture {
-        system @cmd;
-    };
-    $self->log->debugf("command rc: %s, out: %s, err: %s", $rc, \$out, \$err);
-    wantarray ? (($rc == 0), $out, $err) : ($rc == 0)
 }
 
 # special search paths

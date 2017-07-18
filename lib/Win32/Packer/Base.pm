@@ -4,6 +4,7 @@ use Log::Any;
 use Path::Tiny;
 use Win32::Packer::Helpers qw(assert_dir assert_file assert_file_name mkpath guid);
 use Carp;
+use Capture::Tiny qw(capture);
 
 use Moo;
 use namespace::autoclean;
@@ -31,5 +32,16 @@ has icon            => ( is => 'ro', isa => \&assert_file, coerce => \&path );
 sub _die { croak shift->log->fatal(@_) }
 
 sub _dief { croak shift->log->fatalf(@_) }
+
+sub _run_cmd {
+    my $self = shift;
+    my @cmd = map { ref eq 'SCALAR' ? grep length, split /\s+/, $$_ : $_ } @_;
+    $self->log->debugf("running command: %s", \@cmd);
+    my ($out, $err, $rc) = capture {
+        system @cmd;
+    };
+    $self->log->debugf("command rc: %s, out: %s, err: %s", $rc, \$out, \$err);
+    wantarray ? (($rc == 0), $out, $err) : ($rc == 0)
+}
 
 1;
