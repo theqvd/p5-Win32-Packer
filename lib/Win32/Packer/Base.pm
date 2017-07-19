@@ -29,8 +29,10 @@ has app_comments    => ( is => 'ro' );
 
 has icon            => ( is => 'ro', isa => \&assert_file, coerce => \&path );
 
-sub _die { croak shift->log->fatal(@_) }
+has system_drive    => ( is => 'lazy', isa => \&assert_dir, coerce => \&path,
+                         default => sub { $ENV{SystemDrive} // 'C://' } );
 
+sub _die { croak shift->log->fatal(@_) }
 sub _dief { croak shift->log->fatalf(@_) }
 
 sub _run_cmd {

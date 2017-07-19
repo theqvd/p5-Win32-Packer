@@ -1,6 +1,6 @@
 package Win32::Packer::InstallerMaker::msi;
 
-use Win32::Packer::Helpers qw(guid);
+use Win32::Packer::Helpers qw(guid mkpath assert_file assert_file_name assert_dir);
 
 use XML::FromPerl qw(xml_from_perl);
 use Path::Tiny;
@@ -10,23 +10,30 @@ use namespace::autoclean;
 
 extends 'Win32::Packer::InstallerMaker';
 
-has _wxs => (is => 'lazy');
-has _wixobj => ( is => 'lazy' );
-has _msi => ( is => 'lazy' );
+has versioned_app_name => (is => 'lazy', isa => \&assert_file_name);
 
-has wix_dir => ( is => 'lazy' );
+has wix_dir     => ( is => 'lazy', coerce => \&mkpath, isa => \&assert_dir );
+has wxs_fn      => ( is => 'lazy', coerce => \&path);
+has wixobj_fn   => ( is => 'lazy', cperce => \&path);
+has msi_fn      => ( is => 'lazy', coerce => \&path);
 
-has wxs_fn  => ( is => 'lazy' );
-has wixobj_fn => ( is => 'lazy' );
+has _wxs_perl   => ( is => 'lazy' );
+has _wxs        => ( is => 'lazy', coerce => \&path, isa => \&assert_file );
+has _wixobj     => ( is => 'lazy', coerce => \&path, isa => \&assert_file );
+has _msi        => ( is => 'lazy', coerce => \&path, isa => \&assert_file );
 
-has versioned_app_name => (is => 'lazy');
+has wix_toolset => ( is => 'lazy', coerce => \&path, isa => \&assert_dir );
+has candle_exe  => ( is => 'lazy', coerce => \&path, isa => \&assert_file );
+has light_exe   => ( is => 'lazy', coerce => \&path, isa => \&assert_file );
 
-has wix_toolset => ( is => 'lazy' );
-
-has candle_exe => ( is => 'lazy' );
-has light_exe => ( is => 'lazy' );
-
-has msi_fn => ( is => 'lazy' );
+sub _mkid {
+    my $self = shift;
+    my $prefix = shift;
+    my $ix = ++($self->{_last_ix});
+    my $id = join('_', grep defined, $prefix, $ix, @_);
+    $id =~ s/\W/_/g;
+    $id
+}
 
 sub _build_msi_fn {
     my $self = shift;
@@ -36,8 +43,10 @@ sub _build_msi_fn {
 
 sub _build_wix_toolset {
     my $self = shift;
-    my $pfiles = Win32::GetFolderPath(Win32::CSIDL_PROGRAM_FILES()) // 'C:\\Program Files\\';
-    my @c = path($pfiles)->children(qr/Wix\s+Toolset\b/i);
+    my $pfiles = Win32::GetFolderPath(Win32::CSIDL_PROGRAM_FILES())
+        // $self->system_drive->child('Program Files');
+
+    my @c = path($pfiles)->children(qr/^Wix\s+Toolset\b/i);
     $c[0] // $self->_die("Wix Toolset not found in '$pfiles'");
 }
 
@@ -50,12 +59,7 @@ sub _build_versioned_app_name {
     join ' ', grep defined, $self->app_name, $self->app_version;
 }
 
-sub _build_wix_dir {
-    my $self = shift;
-    my $wix_dir = $self->work_dir->child('wix');
-    $wix_dir->mkpath;
-    $wix_dir;
-}
+sub _build_wix_dir { shift->work_dir->child('wix') }
 
 sub _build_wixobj_fn {
     my $self = shift;
@@ -67,91 +71,98 @@ sub _build_wxs_fn {
     $self->wix_dir->child($self->app_name . ".wxs");
 }
 
-sub _build__wxs {
+sub _build__wxs_perl {
     my $self = shift;
 
     my $data = [ Wix => { xmlns => 'http://schemas.microsoft.com/wix/2006/wi' },
                  my $product =
-                 [ Product => { Name => $self->versioned_app_name,
-                                Id => $self->app_id,
+                 [ Product => { Name         => $self->versioned_app_name,
+                                Id           => guid,
                                 Manufacturer => $self->app_vendor,
-                                Version => $self->app_version,
-                                Language => '1033', Codepage => '1252' },
-                   [ Package => { Description => $self->app_description,
-                                  Keywords => $self->app_keywords,
-                                  Comments => $self->app_comments,
-                                  Manufacturer => $self->app_vendor,
+                                Version      => $self->app_version,
+                                Language     => '1033', Codepage => '1252' },
+                   [ Package => { Description      => $self->app_description,
+                                  Keywords         => $self->app_keywords,
+                                  Comments         => $self->app_comments,
+                                  Manufacturer     => $self->app_vendor,
                                   InstallerVersion => '405',
-                                  Languages => '1033',
-                                  Compressed => 'yes',
-                                  SummaryCodepage => '1252' } ],
+                                  Languages        => '1033',
+                                  Compressed       => 'yes',
+                                  SummaryCodepage  => '1252' } ],
                    [ MediaTemplate => { EmbedCab => 'yes' } ],
-                   my $target_dir = 
+                   my $target_dir =
                    [ Directory => { Id => 'TARGETDIR', Name => 'SourceDir' },
                      [ Directory => { Id => 'ProgramFilesFolder', Name => 'PFiles' },
                        my $install_dir =
                        [ Directory => { Id => 'INSTALLDIR', Name => $self->app_name } ]]],
-                   my $feature = 
-                   [ Feature => { Id => 'MainProduct',
+                   my $feature =
+                   [ Feature => { Id    => 'MainProduct',
                                   Title => 'Main Product',
                                   Level => '1' } ] ] ];
 
+    if (defined (my $app_id = $self->app_id)) {
+        $self->log->info("MSI UpgradeCode: $app_id");
+        $product->[1]{UpgradeCode} = $self->app_id;
+    }
+    else {
+        $self->log->warn("An application Id has not been provided, consider adding one otherwise "
+                         . "the generated installer would not be upgreadable!");
+    }
+
     if (defined (my $icon = $self->icon)) {
-        push @$product, ( [ Icon => { Id => 'Icon.ico', SourceFile => $icon } ],
-                          [ Property => { Id => "ARPPRODUCTICON", Value => "Icon.ico" } ] );
+        push @$product,
+            [ Icon     => { Id => 'Icon.ico', SourceFile => $icon } ],
+            [ Property => { Id => "ARPPRODUCTICON", Value => "Icon.ico" } ];
     }
 
     my %dir = ('.' => $install_dir);
     my %dir_id = ('.' => 'INSTALLDIR');
-
-    my $count = 0;
+    my @shortcuts;
+    my $license;
     my $fs = $self->_fs;
-    my $menu_dir;
     for my $to (sort keys %$fs) {
         my $obj = $fs->{$to};
         my $parent = path($to)->parent;
         my $basename = path($to)->basename;
         my $type = $obj->{type};
-        my $id = join '_', $count++, $basename;
-        $id =~ s/\W/_/g;
         my $e;
         if ($type eq 'dir') {
-            $dir{$to} = $e = [ Directory => { Id => "dir_$id",
+            my $id = $dir_id{$to} = $self->_mkid(dir => $basename);
+            $dir{$to} = $e = [ Directory => { Id => $id,
                                               Name => $basename }];
-            $dir_id{$to} = "dir_$id";
         }
         elsif ($type eq 'file') {
-            $e = [ Component => { Id => "component_$id", Guid => guid },
-                   [ File => { Name => $basename, Source => path($obj->{path})->canonpath, Id => "file_$id" } ] ];
-            push @$feature, [ ComponentRef => { Id => "component_$id" }];
+            my $id = $self->_mkid(component => $basename);
+
+            $e = [ Component => { Id => $id, Guid => guid },
+                   [ File => { Name   => $basename,
+                               Source => path($obj->{path})->canonpath,
+                               Id     => $self->_mkid(file => $basename) } ] ];
+
+            push @$feature, [ ComponentRef => { Id => $id }];
 
             if (defined(my $shortcut = $obj->{shortcut})) {
-                unless (defined $menu_dir) {
-                    $menu_dir = [ Directory => { Id => 'ProgramMenuFolder' } ];
-                    push @$target_dir, [ Directory => { Id => 'ProgramMenuFolder' },
-                                         $menu_dir =
-                                         [ Directory => { Id => 'MyshortcutsDir',
-                                                          Name => $self->app_name } ] ];
-                }
+                my $id = $self->_mkid(component => $basename);
 
-                $count++;
-                my $id = join '_', $count++, $basename;
-                $id =~ s/\W/_/g;
-
-                push @$menu_dir, [ Component => { Id => "component_$id", Guid => guid },
-                                   [ Shortcut => { Id => "shortcut_$id",
-                                                   Name => $shortcut,
-                                                   Description => $shortcut,
-                                                   Target => "[$dir_id{$parent}]$basename" } ],
-                                   [ RemoveFolder => { Id => "remove_$id", On => 'uninstall' } ],
-                                   [ RegistryValue => { Root => 'HKCU',
-                                                        Key => join('\\', 'Software', $self->app_vendor, $self->app_name),
-                                                        Name => 'installed',
-                                                        Type => 'integer',
-                                                        Value => '1',
+                push @shortcuts,
+                    [ Component => { Id => $id, Guid => guid },
+                      [ Shortcut => { Id          => $self->_mkid(shortcut => $basename),
+                                      Name        => $shortcut,
+                                      Description => $obj->{shortcut_description} // $shortcut,
+                                      Target      => "[$dir_id{$parent}]$basename" } ],
+                                   [ RemoveFolder => { Id => $self->_mkid(remove => $basename),
+                                                       On => 'uninstall' } ],
+                                   [ RegistryValue => { Root    => 'HKCU',
+                                                        Key     => join('\\', 'Software', $self->app_vendor, $self->app_name),
+                                                        Name    => 'installed',
+                                                        Type    => 'integer',
+                                                        Value   => '1',
                                                         KeyPath => 'yes' } ] ];
-                push @$feature, [ ComponentRef => { Id => "component_$id" } ];
+                push @$feature,
+                    [ ComponentRef => { Id => $id } ];
             }
+
+            $license = $to if $obj->{_is_license};
         }
         else {
             $self->log->warn("Unknown object type '$type' for '$to', ignoring...");
@@ -161,6 +172,33 @@ sub _build__wxs {
         push @{$parent_dir}, $e;
     }
 
+    if (@shortcuts) {
+        if (@shortcuts > 1) {
+            push @$target_dir,
+                [ Directory => { Id => 'ProgramMenuFolder' },
+                  [ Directory => { Id => 'MyShortcutsDir',
+                                   Name => $self->app_name }, @shortcuts ] ];
+        }
+        else {
+            push @$target_dir,
+                [ Directory => { Id => 'ProgramMenuFolder' }, @shortcuts ];
+        }
+    }
+
+    if (defined $license) {
+        push @$product,
+            [ UIRef => { Id => 'WixUI_Minimal' } ],
+            [ WixVariable => { Id => 'WixUILicenseRtf',
+                               Value => $license } ];
+    }
+
+    $data
+}
+
+sub _build__wxs {
+    my $self = shift;
+    $self->log->info("Generating Wxs file");
+    my $data = $self->_wxs_perl;
     my $doc = xml_from_perl $data;
     my $wxs_fn = $self->wxs_fn;
     $doc->toFile($wxs_fn, 2);
@@ -172,7 +210,7 @@ sub _build__wixobj {
     my $self = shift;
     my $out = $self->wixobj_fn;
     my $in = $self->_wxs;
-
+    $self->log->info("Generating Wixobj file");
     my $rc = $self->_run_cmd($self->candle_exe, $in, -out => $out)
         or $self->_die("unable to compile wxs file '$in'");
     $out;
@@ -183,7 +221,9 @@ sub _build__msi {
     my $out = $self->msi_fn;
     my $in = $self->_wixobj;
 
-    my $rc = $self->_run_cmd($self->light_exe, $in, -out => $out)
+    $self->log->info("Generating MSI file");
+    my @ext = map { -ext => $_->canonpath } ($self->wix_toolset->child('bin', 'WixUIExtension.dll'));
+    my $rc = $self->_run_cmd($self->light_exe, $in, @ext, -out => $out)
         or $self->_die("unable to link wixobj file '$in'");
     $out
 }

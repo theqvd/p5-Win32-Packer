@@ -38,6 +38,9 @@ has extra_dll      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { []
                         isa => \&assert_aoh_path_file );
 has extra_dir      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
                         isa => \&assert_aoh_path_dir );
+has extra_file     => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
+                        isa => \&assert_aoh_path_file );
+has license        => ( is => 'ro', coerce => \&path, isa => \&assert_file );
 has perl_exe       => ( is => 'lazy', isa => \&assert_file,
                         default => sub { path($^X)->realpath } );
 has strawberry     => ( is => 'lazy', isa => \&assert_dir );
@@ -54,8 +57,6 @@ has strawberry_c_bin => ( is => 'lazy', isa => \&assert_dir, coerce => \&path );
 has cygpath        => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has cygwin         => ( is => 'lazy', isa => \&assert_dir, coerce => \&path );
 has cygwin_bin     => ( is => 'lazy', isa => \&assert_dir, coerce => \&path );
-has system_drive   => ( is => 'lazy', isa => \&assert_dir, coerce => \&path,
-                        default => sub { $ENV{SystemDrive} // 'C://' } );
 has search_path    => ( is => 'ro', coerce => \&to_array_path, default => sub { [] } );
 has windres_exe    => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has app_subsystem  => ( is => 'ro', default => 'console',
@@ -226,8 +227,10 @@ sub installer_maker {
     $self->_install_wrappers($installer);
     $self->_install_extra_exe($installer);
     $self->_install_extra_dir($installer);
+    $self->_install_extra_file($installer);
     $self->_install_pm_deps($installer);
     $self->_install_pe_deps($installer);
+    $self->_install_license($installer);
 
     $installer;
 }
@@ -282,12 +285,23 @@ sub _install_load_pl {
     $installer->add_file($self->_load_pl);
 }
 
+sub _common_file_opts {
+    my ($self, $obj) = @_;
+    my @c;
+    for my $k (qw(shortcut shortcut_description shortcut_icon)) {
+        if (defined (my $v = $obj->{$k})) {
+            push @c, $k, $v;
+        }
+    }
+    @c
+}
+
 sub _install_wrappers {
     my ($self, $installer) = @_;
     $self->log->info("Adding wrappers");
     for (@{$self->_script_wrappers}) {
         $installer->add_file($_->{path}, $_->{path}->basename,
-                             shortcut => $_->{shortcut});
+                             $self->_common_file_opts($_));
     }
 }
 
@@ -300,7 +314,8 @@ sub _install_extra_exe {
         if (defined (my $subdir = $_->{subdir})) {
             $to = $subdir->child($to)
         }
-        $installer->add_file($path, $to);
+        $installer->add_file($path, $to,
+                             $self->_common_file_opts($_));
     }
 }
 
@@ -311,6 +326,25 @@ sub _install_extra_dir {
         my $path = $_->{path};
         my $to = $_->{subdir} // path($path->realpath->basename);
         $installer->add_tree($path, $to);
+    }
+}
+
+sub _install_extra_file {
+    my ($self, $installer) = @_;
+    $self->log->info("Adding extra files");
+    for (@{$self->extra_file}) {
+        my $path = $_->{path};
+        my $to = $_->{subdir} // path($path->realpath->basename);
+        $installer->add_file($path, $to,
+                             $self->_common_file_opts($_));
+    }
+}
+
+sub _install_license {
+    my ($self, $installer) = @_;
+    if (defined (my $license = $self->license)) {
+        $self->log->info("Adding license file");
+        $installer->add_file($license, 'LICENSE.RTF', _is_license => 1);
     }
 }
 
