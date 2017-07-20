@@ -275,6 +275,7 @@ sub retrieve {
     if (defined $log) {
         $self->log($log);
         $self->log->info("Win32::Packer object retrieved from '$fn'");
+        $self->log->tracef("object: %s", $self);
     }
     $self;
 }
@@ -288,7 +289,7 @@ sub _install_load_pl {
 sub _common_file_opts {
     my ($self, $obj) = @_;
     my @c;
-    for my $k (qw(shortcut shortcut_description shortcut_icon)) {
+    for my $k (qw(shortcut shortcut_description shortcut_icon handles)) {
         if (defined (my $v = $obj->{$k})) {
             push @c, $k, $v;
         }
@@ -510,7 +511,7 @@ sub _build__script_wrappers {
     my $self = shift;
     [ map {
         my %h = ( path => $self->_make_wrapper_exe($_),
-                  shortcut => $_->{shortcut} );
+                  $self->_common_file_opts($_) );
         \%h
     } @{$self->{scripts}} ]
 }

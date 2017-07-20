@@ -98,7 +98,9 @@ sub _build__wxs_perl {
                    my $feature =
                    [ Feature => { Id    => 'MainProduct',
                                   Title => 'Main Product',
-                                  Level => '1' } ] ] ];
+                                  Level => '1' } ],
+                   [ UIRef => { Id => 'WixUI_InstallDir' } ],
+                   [ Property => { Id => 'WIXUI_INSTALLDIR', Value => 'INSTALLDIR' } ]]];
 
     if (defined (my $app_id = $self->app_id)) {
         $self->log->info("MSI UpgradeCode: $app_id");
@@ -133,11 +135,48 @@ sub _build__wxs_perl {
         }
         elsif ($type eq 'file') {
             my $id = $self->_mkid(component => $basename);
-
+            my $file_id = $self->_mkid(component => $basename);
             $e = [ Component => { Id => $id, Guid => guid },
+                   my $file =
                    [ File => { Name   => $basename,
                                Source => path($obj->{path})->canonpath,
-                               Id     => $self->_mkid(file => $basename) } ] ];
+                               Id     => $file_id } ] ];
+
+            if (defined (my $hs = $obj->{handles})) {
+                $self->log->info("Adding handlers for $to") if @$hs;
+                for my $hs (@$hs) {
+                    if (defined (my $ext = $hs->{extension})) {
+                        $ext =~ s/^\.//;
+                        $self->log->debug("file $to handles extension $ext");
+                        my $id = $self->_mkid(component => $basename);
+                        push @$target_dir,
+                            [ Component => { Id => $id, Guid => guid, KeyPath => 'yes' },
+                              [ ProgId => { Id => $self->_mkid(progid => $basename),
+                                            Icon => $file_id, IconIndex => 0 },
+                                [ Extension => { Id => ".$ext",
+                                                 ContentType => $hs->{content_type} // "application/x-$ext" },
+                                  [ Verb => { Id => 'open', Command => "&amp;Open",
+                                              TargetFile => $file_id, Argument => '"%1"' } ] ] ] ];
+
+                        push @$feature, [ ComponentRef => { Id => $id } ];
+                    }
+
+                    if (defined (my $scheme = $hs->{scheme})) {
+                        $self->log->debug("file $to handles scheme $scheme");
+                        push @$e,
+                            [ RegistryKey => { Root => 'HKCR',
+                                               Key  => $scheme,
+                                               Action => 'createAndRemoveOnUninstall' },
+                              [ RegistryValue => { Type=> 'string', Name => 'URL Protocol', Value => ''} ],
+                              [ RegistryValue => { Type => 'string', Value => "URL:$scheme" } ],
+                              [ RegistryKey => { Key => "DefaultIcon" },
+                                [ RegistryValue => { Type => 'string', Value => "[$dir_id{$parent}]$basename" } ] ],
+                              [ RegistryKey => { Key => 'shell\\open\\command' },
+                                [ RegistryValue => { Type => "string",
+                                                     Value => qq("[$dir_id{$parent}]$basename" "%1") } ]]];
+                    }
+                }
+            }
 
             push @$feature, [ ComponentRef => { Id => $id }];
 
@@ -161,6 +200,8 @@ sub _build__wxs_perl {
                 push @$feature,
                     [ ComponentRef => { Id => $id } ];
             }
+
+
 
             $license = $to if $obj->{_is_license};
         }
@@ -187,7 +228,6 @@ sub _build__wxs_perl {
 
     if (defined $license) {
         push @$product,
-            [ UIRef => { Id => 'WixUI_Minimal' } ],
             [ WixVariable => { Id => 'WixUILicenseRtf',
                                Value => $license } ];
     }

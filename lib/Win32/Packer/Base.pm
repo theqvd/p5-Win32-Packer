@@ -2,7 +2,8 @@ package Win32::Packer::Base;
 
 use Log::Any;
 use Path::Tiny;
-use Win32::Packer::Helpers qw(assert_dir assert_file assert_file_name mkpath guid);
+use Win32::Packer::Helpers qw(assert_dir assert_file assert_file_name assert_guid
+                              mkpath guid to_uc);
 use Carp;
 use Capture::Tiny qw(capture);
 
@@ -19,7 +20,8 @@ has app_version     => ( is => 'ro', isa => \&assert_file_name);
 
 has app_vendor      => ( is => 'ro', default => 'Acme Ltd.');
 
-has app_id          => ( is => 'lazy', default => \&guid );
+has app_id          => ( is => 'lazy', default => \&guid, coerce => \&to_uc,
+                         isa => \&assert_guid );
 
 has app_description => ( is => 'ro' );
 

@@ -23,6 +23,8 @@ sub assert_subsystem {
         or croak "app_subsystem must be 'windows' or 'console'";
 }
 
+sub assert_guid { $_[0] =~ /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/ }
+
 sub mkpath {
     my $p = path(shift);
     $p->mkpath;
@@ -36,6 +38,8 @@ sub to_list {
     ()
 }
 
+sub to_uc { uc $_[0] }
+
 sub to_array { [to_list(shift)] }
 
 sub to_array_path { [map path($_), to_list(shift)] }
@@ -44,6 +48,7 @@ sub to_loh_path {
     map {
         my %h = (ref eq 'HASH' ? %$_ : (path => $_));
         defined and $_ = path($_) for @h{qw(path subdir icon)};
+        $_ = to_array($_) for @h{qw(handles)};
         $_ = to_array_path($_) for @h{qw(search_path)};
         $h{basename} //= $h{path}->basename(qr/\.\w*/);
         assert_subsystem($h{subsystem}) if defined $h{subsystem};
