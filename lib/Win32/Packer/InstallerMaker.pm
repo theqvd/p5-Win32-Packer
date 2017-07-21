@@ -8,6 +8,7 @@ use namespace::autoclean;
 extends 'Win32::Packer::Base';
 
 has _fs => ( is => 'ro', default => sub { {} } );
+has _lc_fs => ( is => 'ro', default => sub { {} } );
 
 sub add_file {
     my $self = shift;
@@ -56,9 +57,21 @@ sub _add_obj {
     $self->_add_obj_norec($to, %opts);
 }
 
+sub _normalize_to {
+    my ($self, $to) = @_;
+    $self->_lc_fs->{lc $to} //= $to; # case normalization
+}
+
 sub _add_obj_norec {
     my ($self, $to, %opts) = @_;
-    my $obj = $self->_fs->{$to} //= {};
+    my $to1 = $self->_normalize_to($to);
+    my $obj = $self->_fs->{$to1} //= {};
+
+    $self->_merge($to, $obj, %opts);
+}
+
+sub _merge {
+    my ($self, $to, $obj, %opts) = @_;
     for my $k (keys %opts) {
         if (defined $opts{$k}) {
             if (defined $obj->{$k}) {
@@ -70,6 +83,13 @@ sub _add_obj_norec {
             }
         }
     }
+}
+
+sub merge {
+    my ($self, $to, %opts) = @_;
+    $self->log->debug("Merging object at '$to'");
+    my $obj = $self->_fs->{$self->_normalize_to($to)} // $self->_die("Unable to merge nonexistent object $to");
+    $self->_merge($to, $obj, %opts);
 }
 
 sub run {

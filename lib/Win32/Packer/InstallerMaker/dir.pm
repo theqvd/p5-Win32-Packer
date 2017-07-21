@@ -1,7 +1,7 @@
 package Win32::Packer::InstallerMaker::dir;
 
 use Path::Tiny;
-use Win32::Packer::Helpers qw(mkpath);
+use Win32::Packer::Helpers qw(mkpath to_bool);
 
 use Moo;
 use namespace::autoclean;
@@ -9,6 +9,8 @@ use namespace::autoclean;
 extends 'Win32::Packer::InstallerMaker';
 
 has target_dir => (is => 'lazy', coerce => \&mkpath);
+
+has update => (is => 'ro', coerce => \&to_bool );
 
 sub _build_target_dir {
     my $self = shift;
@@ -22,6 +24,7 @@ sub run {
     my $target_dir = $self->target_dir;
 
     my $fs = $self->_fs;
+    my $update = $self->update;
     for my $to (sort keys %$fs) {
         my $topto = $target_dir->child($to);
         my $obj = $fs->{$to};
@@ -31,6 +34,10 @@ sub run {
             $topto->mkpath;
         }
         elsif ($type eq 'file') {
+            if ($update and -f $topto and (stat $obj->{path})[9] <= (stat $topto)[9]) {
+                $self->log->trace("Already up to date, skipping!");
+                next;
+            }
             path($obj->{path})->copy($topto);
         }
         else {

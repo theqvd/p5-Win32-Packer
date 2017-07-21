@@ -74,7 +74,8 @@ sub _build_wxs_fn {
 sub _build__wxs_perl {
     my $self = shift;
 
-    my $data = [ Wix => { xmlns => 'http://schemas.microsoft.com/wix/2006/wi' },
+    my $data = [ Wix => { xmlns => 'http://schemas.microsoft.com/wix/2006/wi',
+                          'xmlns:fw' => 'http://schemas.microsoft.com/wix/FirewallExtension' },
                  my $product =
                  [ Product => { Name         => $self->versioned_app_name,
                                 Id           => guid,
@@ -142,6 +143,8 @@ sub _build__wxs_perl {
                                Source => path($obj->{path})->canonpath,
                                Id     => $file_id } ] ];
 
+            $license = $to if $obj->{_is_license};
+
             if (defined (my $hs = $obj->{handles})) {
                 $self->log->info("Adding handlers for $to") if @$hs;
                 for my $hs (@$hs) {
@@ -155,7 +158,7 @@ sub _build__wxs_perl {
                                             Icon => $file_id, IconIndex => 0 },
                                 [ Extension => { Id => ".$ext",
                                                  ContentType => $hs->{content_type} // "application/x-$ext" },
-                                  [ Verb => { Id => 'open', Command => "&amp;Open",
+                                  [ Verb => { Id => 'open', Command => '&Open',
                                               TargetFile => $file_id, Argument => '"%1"' } ] ] ] ];
 
                         push @$feature, [ ComponentRef => { Id => $id } ];
@@ -165,8 +168,7 @@ sub _build__wxs_perl {
                         $self->log->debug("file $to handles scheme $scheme");
                         push @$e,
                             [ RegistryKey => { Root => 'HKCR',
-                                               Key  => $scheme,
-                                               Action => 'createAndRemoveOnUninstall' },
+                                               Key  => $scheme },
                               [ RegistryValue => { Type=> 'string', Name => 'URL Protocol', Value => ''} ],
                               [ RegistryValue => { Type => 'string', Value => "URL:$scheme" } ],
                               [ RegistryKey => { Key => "DefaultIcon" },
@@ -201,9 +203,37 @@ sub _build__wxs_perl {
                     [ ComponentRef => { Id => $id } ];
             }
 
+            if (defined (my $rules = $obj->{firewall_allow})) {
+                if (@$rules) {
+                    for my $rule (@$rules) {
+                        my ($src, $proto) = split /:/, lc $rule;
+                        my $id = $self->_mkid(component => $basename, 'fw_rule');
+                        my $rule_id = $self->_mkid(firewall => $basename);
+                        push @$target_dir,
+                            [ Component => { Id => $id, Guid => guid, KeyPath => 'yes' },
+                              my $r =
+                              [ 'fw:FirewallException' => { Id            => $rule_id,
+                                                            Name          => join(" ", $self->versioned_app_name, rule => $rule_id),
+                                                            Program       => "[$dir_id{$parent}]$basename",
+                                                            IgnoreFailure => 'yes' } ] ];
+                        push @$feature,
+                            [ ComponentRef => { Id => $id } ];
 
-
-            $license = $to if $obj->{_is_license};
+                        if ($src eq 'localhost') {
+                            push @$r, [ 'fw:RemoteAddress' => '127.0.0.1/24' ]
+                        }
+                        elsif ($src eq 'localnet' or $src eq 'localsubnet') {
+                            $r->[1]{Scope} = 'localSubnet';
+                        }
+                        elsif ($src eq 'any' or $src eq '*') {
+                            $r->[1]{Scope} = 'any';
+                        }
+                        if (defined $proto) {
+                            $r->[1]{Protocol} = $proto;
+                        }
+                    }
+                }
+            }
         }
         else {
             $self->log->warn("Unknown object type '$type' for '$to', ignoring...");
@@ -251,7 +281,7 @@ sub _build__wixobj {
     my $out = $self->wixobj_fn;
     my $in = $self->_wxs;
     $self->log->info("Generating Wixobj file");
-    my $rc = $self->_run_cmd($self->candle_exe, $in, -out => $out)
+    my $rc = $self->_run_cmd($self->candle_exe, $in, -out => $out, -ext => 'WixFirewallExtension')
         or $self->_die("unable to compile wxs file '$in'");
     $out;
 }
@@ -262,7 +292,8 @@ sub _build__msi {
     my $in = $self->_wixobj;
 
     $self->log->info("Generating MSI file");
-    my @ext = map { -ext => $_->canonpath } ($self->wix_toolset->child('bin', 'WixUIExtension.dll'));
+    my $wix_toolset = $self->wix_toolset;
+    my @ext = map { -ext => $wix_toolset->child(bin => "Wix${_}Extension.dll")->canonpath } qw(UI Firewall);
     my $rc = $self->_run_cmd($self->light_exe, $in, @ext, -out => $out)
         or $self->_die("unable to link wixobj file '$in'");
     $out

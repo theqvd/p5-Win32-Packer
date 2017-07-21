@@ -48,7 +48,7 @@ sub to_loh_path {
     map {
         my %h = (ref eq 'HASH' ? %$_ : (path => $_));
         defined and $_ = path($_) for @h{qw(path subdir icon)};
-        $_ = to_array($_) for @h{qw(handles)};
+        $_ = to_array($_) for @h{qw(handles firewall_allow)};
         $_ = to_array_path($_) for @h{qw(search_path)};
         $h{basename} //= $h{path}->basename(qr/\.\w*/);
         assert_subsystem($h{subsystem}) if defined $h{subsystem};

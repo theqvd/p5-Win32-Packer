@@ -40,6 +40,7 @@ has extra_dir      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { []
                         isa => \&assert_aoh_path_dir );
 has extra_file     => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
                         isa => \&assert_aoh_path_file );
+has merge          => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] } );
 has license        => ( is => 'ro', coerce => \&path, isa => \&assert_file );
 has perl_exe       => ( is => 'lazy', isa => \&assert_file,
                         default => sub { path($^X)->realpath } );
@@ -50,7 +51,7 @@ has inc            => ( is => 'lazy', coerce => \&to_array_path );
 has scan_deps_opts => ( is => 'ro', default => sub { {} } );
 has cache          => ( is => 'ro', coerce => \&mkpath, isa => \&assert_dir) ;
 has clean_cache    => ( is => 'ro', coerce => \&to_bool );
-has keep_work_dir  => ( is => 'ro', coerce => \&to_bool, default => sub { 0 } );
+has keep_work_dir  => ( is => 'ro', coerce => \&to_bool, default => 0 );
 has cc_exe         => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has ld_exe         => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has strawberry_c_bin => ( is => 'lazy', isa => \&assert_dir, coerce => \&path );
@@ -232,6 +233,8 @@ sub installer_maker {
     $self->_install_pe_deps($installer);
     $self->_install_license($installer);
 
+    $self->_install_merge($installer);
+
     $installer;
 }
 
@@ -250,6 +253,13 @@ sub _install_scripts {
         my $to = $lib->child($_->{basename}.'.pl');
         $installer->add_file($_->{path}, $to);
     }
+}
+
+sub _install_merge {
+    my ($self, $installer) = @_;
+    $self->log->info("Merging extra data");
+    $installer->merge($_->{path}, $self->_common_file_opts($_))
+        for @{$self->merge};
 }
 
 sub store {
@@ -289,7 +299,7 @@ sub _install_load_pl {
 sub _common_file_opts {
     my ($self, $obj) = @_;
     my @c;
-    for my $k (qw(shortcut shortcut_description shortcut_icon handles)) {
+    for my $k (qw(shortcut shortcut_description shortcut_icon handles firewall_allow)) {
         if (defined (my $v = $obj->{$k})) {
             push @c, $k, $v;
         }

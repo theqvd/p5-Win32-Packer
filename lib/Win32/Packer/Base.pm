@@ -39,7 +39,7 @@ sub _dief { croak shift->log->fatalf(@_) }
 
 sub _run_cmd {
     my $self = shift;
-    my @cmd = map { ref eq 'SCALAR' ? grep length, split /\s+/, $$_ : $_ } @_;
+    my @cmd = map { ref eq 'SCALAR' ? grep length, split /\s+/, $$_ : "$_" } @_;
     $self->log->debugf("running command: %s", \@cmd);
     my ($out, $err, $rc) = capture {
         system @cmd;
