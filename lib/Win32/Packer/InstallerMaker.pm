@@ -1,6 +1,7 @@
 package Win32::Packer::InstallerMaker;
 
 use Path::Tiny;
+use Win32::Packer::Helpers qw(to_list);
 
 use Moo;
 use namespace::autoclean;
@@ -24,19 +25,23 @@ sub add_tree {
     my $self = shift;
     my $from = shift;
     my $to = shift // path($from->realpath->basename);
-
     $self->log->debug("Adding dir '$from' as '$to'");
-
-    $self->_add_tree($from, $to);
+    my %opts = @_;
+    my %to_skip = map { lc(path($to)->child($_)) => 1 } to_list $opts{skip};
+    $self->_add_tree($from, $to, \%to_skip);
 }
 
 sub _add_tree {
-    my ($self, $from, $to) = @_;
+    my ($self, $from, $to, $to_skip) = @_;
 
+    if ($to_skip->{lc $to}) {
+        $self->log->trace("Skipping '$from', to: '$to'");
+        return;
+    }
     if ($from->is_dir) {
         $self->_add_obj($to, type => 'dir');
         for my $c ($from->children) {
-            $self->_add_tree($c, $to->child($c->basename));
+            $self->_add_tree($c, $to->child($c->basename), $to_skip);
         }
     }
     elsif ($from->is_file) {
@@ -75,8 +80,13 @@ sub _merge {
     for my $k (keys %opts) {
         if (defined $opts{$k}) {
             if (defined $obj->{$k}) {
-                $self->_die("fs object $to reinserted with a different value for $k: $opts{$k}, was: $obj->{$k}")
-                    unless $obj->{$k} eq $opts{$k};
+                if (grep $k eq $_, qw(handles firewall_allow)) {
+                    $obj->{$k} = [@{$obj->{$k}}, @{$opts{$k}}];
+                }
+                else {
+                    $self->_die("fs object $to reinserted with a different value for $k: $opts{$k}, was: $obj->{$k}")
+                        unless $obj->{$k} eq $opts{$k};
+                }
             }
             else {
                 $obj->{$k} = $opts{$k}

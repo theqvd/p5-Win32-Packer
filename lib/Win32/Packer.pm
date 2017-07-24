@@ -299,7 +299,7 @@ sub _install_load_pl {
 sub _common_file_opts {
     my ($self, $obj) = @_;
     my @c;
-    for my $k (qw(shortcut shortcut_description shortcut_icon handles firewall_allow)) {
+    for my $k (qw(shortcut shortcut_description shortcut_icon handles firewall_allow skip)) {
         if (defined (my $v = $obj->{$k})) {
             push @c, $k, $v;
         }
@@ -336,7 +336,7 @@ sub _install_extra_dir {
     for (@{$self->extra_dir}) {
         my $path = $_->{path};
         my $to = $_->{subdir} // path($path->realpath->basename);
-        $installer->add_tree($path, $to);
+        $installer->add_tree($path, $to, $self->_common_file_opts($_));
     }
 }
 
@@ -492,6 +492,10 @@ sub _scan_exe_dll_deps {
                  @{$self->extra_exe},
                  @{$self->extra_dll} );
     for my $exe (@exes) {
+        unless ($exe->{scan_deps} // 1) {
+            $self->log->debug("Skipping dependency scanning for $exe->{path}");
+            next;
+        }
         $self->log->debugf("looking for '%s' DLL dependencies", $exe);
         my $path = $exe->{path};
         my $subdir = $exe->{subdir};
