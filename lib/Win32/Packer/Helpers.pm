@@ -15,6 +15,7 @@ sub assert_file { $_[0]->is_file or croak "$_[0] is not a file" }
 sub assert_file_name { $_[0] =~ tr{<>:"/\\|?*}{} and croak "$_[0] is not a valid Windows file name" }
 sub assert_dir  { $_[0]->is_dir or croak "$_[0] is not a directory" }
 
+sub assert_aoh_path { defined $_->{path} or croak "$_ is not a path" for @{$_[0]} }
 sub assert_aoh_path_file { $_->{path}->is_file or croak "$_ is not a file" for @{$_[0]} }
 sub assert_aoh_path_dir { $_->{path}->is_dir or croak "$_ is not a directory" for @{$_[0]} }
 

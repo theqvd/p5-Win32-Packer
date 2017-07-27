@@ -12,10 +12,13 @@ use Data::Dumper;
 use Config;
 use Win32::Ldd qw(pe_dependencies);
 
-use Win32::Packer::Helpers qw(mkpath to_bool to_array to_array_path to_aoh_path
-                              assert_file assert_file_name assert_aoh_path_file
-                              assert_dir assert_subsystem assert_aoh_path_dir
-                              c_string_quote windows_directory to_loh_path);
+use Win32::Packer::Helpers qw(mkpath to_bool to_array to_array_path
+                              to_aoh_path assert_file assert_file_name
+                              assert_aoh_path_file assert_dir
+                              assert_subsystem assert_aoh_path_dir
+                              assert_aoh_path c_string_quote
+                              windows_directory to_loh_path);
+
 use Win32::Packer::WrapperCCode;
 use Win32::Packer::LoadPLCode;
 our ($wrapper_c_code, $load_pl_code);
@@ -33,7 +36,7 @@ has extra_inc      => ( is => 'ro', coerce => \&to_array_path, default => sub { 
 has scripts        => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
                         isa => sub { @{$_[0]} > 0 or croak "scripts argument missing" } );
 has extra_exe      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
-                        isa => \&assert_aoh_path_file );
+                        isa => \&assert_aoh_path );
 has extra_dll      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
                         isa => \&assert_aoh_path_file );
 has extra_dir      => ( is => 'ro', coerce => \&to_aoh_path, default => sub { [] },
@@ -76,6 +79,8 @@ has _script_wrappers => ( is => 'lazy' );
 
 has _extra_exe_mod => ( is => 'lazy');
 
+has _extra_exe_resolved => ( is => 'lazy' );
+
 around new => sub {
     my $orig = shift;
     my $class = shift;
@@ -104,17 +109,39 @@ sub _clean_all {
 sub _build__extra_exe_mod {
     my $self = shift;
     my @mod;
-    for (@{$self->extra_exe}) {
+    for (@{$self->_extra_exe_resolved}) {
         if (defined (my $subsystem = $_->{subsystem})) {
-            my %mod = %$_;
-            $mod{path} = $self->_change_exe_subsystem($_, $subsystem);
-            push @mod, \%mod;
+            push @mod, { %$_, path => $self->_change_exe_subsystem($_, $subsystem) };
         }
         else {
             push @mod, $_;
         }
     }
     \@mod
+}
+
+sub _build__extra_exe_resolved {
+    my $self = shift;
+    my @res;
+    for (@{$self->extra_exe}) {
+        my $path = $_->{path};
+        if ($path->is_file) {
+            push @res, $_;
+        }
+        else {
+            if ($_->{cygwin}) {
+                my $cygwin = $self->cygwin;
+                if (my ($path) = grep($_->is_file,
+                                      map $_->child($path), $cygwin, $cygwin->child('bin'))) {
+                    $self->log->debug("Executable '$_->{path}' resolved to '$path'");
+                    push @res, { %$_, path => $path };
+                    next;
+                }
+            }
+            $self->_die("Could not resolve exe $path");
+        }
+    }
+    \@res
 }
 
 sub _build_inc {
