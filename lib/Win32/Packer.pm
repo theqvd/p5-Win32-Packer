@@ -710,30 +710,265 @@ sub _wx_xs_dll_search_path {
 1;
 
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 NAME
 
-Win32::Packer - Perl extension for blah blah blah
+Win32::Packer - Pack your Perl applications for Windows
 
 =head1 SYNOPSIS
 
   use Win32::Packer;
-  blah blah blah
+
+  my %args = ( app_name => 'Hot-Dog Vendor Revengeinator',,
+               app_vendor => "Doofenshmirtz's Quality Bratwurst",
+               app_version => '0.1',
+               app_id => 'YOUR_APP-GUID-GOES-HERE-dc9c9d79a96c,
+               license => 'files/license.rtf',
+               icon => 'pixmaps/hot-dog-vendor-revengeinator.ico',
+               scripts => [ { path => 'bin/hot-dog-vendor-revengeinator.pl',
+                              shortcut => 'Hot-Dog Vendor Revengeinator',
+                              shortcut_description => 'Sends off blasts to hot dog vendors '.
+                                                      'encasing the hot dogs in ice',
+                              handles => { extension => '.hdg' } },
+                            { path => 'bin/hot-dog-vendor-finder.pl' },
+                            { path => 'bin/hot-dog-freezer.pl',
+                              firewall_allow => 'localhost' } ],
+               app_subsystem => 'windows',
+               extra_inc => [qw(lib)],
+               extra_modules => [qw(HotDog::Vendor::Finder::Impl::Windows
+                                    IO::Socket::IP)],
+               extra_exe => [ { path => 'c:\\program files\\blaster\\blaster.exe',
+                                subdir => 'blaster' } ],
+               extra_dir => [ { path => 'pixmaps',
+                                subdir => 'pixmaps' } ],
+               search_path => 'dll',
+               output_dir => 'output' );
+
+  my $packer = Win32::Packer->new(%args);
+
+  $packer->make_installer(type => 'msi');
+  $packer->make_installer(type => 'zip', compression_level => 'best');
 
 =head1 DESCRIPTION
 
-Stub documentation for Win32::Packer, created by h2xs. It looks like the
-author of the extension was negligent enough to leave the stub
-unedited.
+  ***********************************************************************
+  *                            WARNING!!!                               *
+  *                                                                     *
+  * This is an early experimental release of Win32::Packer.             *
+  *                                                                     *
+  * The API is not stable yet and I would change it in order to improve *
+  * the module usability, implement new features, etc. at will.         *
+  *                                                                     *
+  * Though, working installers would keep working!                      *
+  *                                                                     *
+  ***********************************************************************
 
-Blah blah blah.
+This module allows one to pack Perl applications for distribution to
+Windows users.
 
-=head2 EXPORT
+It tries to be simple to use and feature rich.
 
-None by default.
+It is also opinionated and its customizability is rather limited.
+
+The module provides several backends allowing you to generate the
+installers in several formats, being the main ones the C<msi> backend
+which generates standart MSI files and the C<zip> installer that
+generates ZIP archives that can be unzipped in any location in the target
+computer (aka, portable distributions).
+
+The usage of the module as show in the synopsis is quite simple: call
+the constructor passing a data structure defining your application and
+then for every installer type you want to create, call the
+C<make_installer> method.
+
+=head2 DATA STRUCTURES
+
+=over 4
+
+=item The Path data structure
+
+I<Looking for a better name!>
+
+Several entities (e.g. scripts, executables, directories) are declared
+using this structure consisting of a hash containing a mandatory
+C<path> argument and several optional properties. Example:
+
+     scripts => [ { path => '/path/to/script.pl',
+                    subsystem => 'windows' }, ... ];
+
+When the only property is the path, a single scalar containing it can
+be used instead of the hash. Example:
+
+     extra_inc => [ './lib', '/usr/local/my-perl-lib' ]
+
+The available properties are as follows:
+
+=over 4
+
+=item path => $path
+
+Location of the resource being defined
+
+=item subdir => $target_subdir
+
+The target destination directory.
+
+The generated installer will create this subdirectory inside the
+target directory and place the file there.
+
+It can have several levels (e.g. C<subdir => 'foo/bar/doz'>).
+
+=item icon => $icon_path
+
+Sets the entity icon which would be displayed by Windows in
+the program windows, associated files, etc.
+
+=item handles => \@handles_array
+
+See the Handles data structure bellow.
+
+=item firewall_allow => $source
+
+Creates a firewall rule exception allowing the executable to provide
+Internet services. C<$sources> can be one of C<localhost>, C<localnet>
+or C<all>.
+
+If your executable binds to any public network interface, recent
+versions of Windows would request the user to explicitly allow it
+unless you use this property to set an exception.
+
+=item search_path => \@paths
+
+List of extra directories to use when looking for DLL
+dependencies. Example:
+
+  search_path => ['c:\\strawberry perl\\win-builds\\bin'];
+
+=item basename => $basename
+
+In several cases, the packer needs to generate files with the same
+name but a different extension. This property allows you to override
+the basename.
+
+=item subsystem => $subsystem
+
+Select the subsystem for the generated executable. Valid values are
+C<console> and C<windows>.
+
+See the Subsystems chapter below.
+
+=back
+
+=item The Handles data structure
+
+This structure allows you to declare the set of file types and URI
+schemes that the executable is able to handle.
+
+The supported properties are:
+
+=over 4
+
+=item scheme => $uri_scheme
+
+Associated the executable with URLs using the given scheme. For
+instance, if scheme is set to 'hot-dog', once the application is
+installed, will call the executable when the user clicks on an url
+such as C<hot-dog://hot-dogs.com/?onion=yes> and pass it as an
+argument.
+
+=item extension => $ext
+
+Associates files with the given extension to the executable.
+
+=item content_type => $content_type
+
+Associates files with the given content type to the executable.
+
+=back
+
+Note that currently, only the C<msi> backend supports associating
+applications.
+
+=back
+
+=head2 METHODS
+
+=over 4
+
+=item $packer = Win32::Packer->new(%opts)
+
+Builds a new Win32::Packer object.
+
+The accepted arguments are as follows:
+
+=over 4
+
+=item app_name => $app_name
+
+Name of the application. Used in several places, for instance, to
+derive installer names and directories.
+
+=item app_vendor => $vendor
+
+The name of the vendor. Used only in the installer metadata.
+
+=item app_version => $version
+
+The current application version. Windows requires it to be two or
+three numbers separated by dots (e.g. C<4.5> or C<4.5.1>).
+
+=item app_id => $guid
+
+Your application GUID. You should always use the same identifier along
+different versions of your application if you want upgrades to work.
+
+=item license => $license_rtf
+
+Path to a file containing the license for your app in RTF format.
+
+=item work_dir => $work_dir
+
+Working dir for place temporary files.
+
+=item scripts => \@scripts
+
+Declares the set of scripts to pack in the installer as an array of
+Path data structures.
+
+=item extra_inc => \@paths
+
+List of extra directories for searching Perl modules.
+
+=item extra_modules => \@modules
+
+Win32::Packer analyzes and finds dependencies for the scripts
+automatically using L<Module::ScanDeps>, unfortunatelly, this module
+is not always able to find all the dependencies.
+
+This option can be used to instruct the module to pack any module not
+automatically detected as a dependency.
 
 
+=back
+
+=item $packer->make_installer(%opts)
+
+=back
+
+=head2 THINGS YOU SHOULD KNOW
+
+=head3 Windows executable subsystem
+
+Windows has (mainly) two kind of executables: C<windows> and
+C<console>.
+
+The more visible difference is that C<console> applications would open
+a console windows when invoked without one but there are other subtle
+differences that may affect your programs and things that work right when
+you run your script using the perl executable from the command line,
+would fail when packed as a windows subsystem executable.
+
+Don't blame the packer, it is Windows which works that way!
 
 =head1 SEE ALSO
 
