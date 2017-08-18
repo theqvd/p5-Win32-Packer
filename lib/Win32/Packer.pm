@@ -818,6 +818,11 @@ target directory and place the file there.
 
 It can have several levels (e.g. C<subdir => 'foo/bar/doz'>).
 
+Note that having dedicated subdirectories for every extra executable
+is a good way to avoid having conflicting libraries. For instance,
+having two executables depending on different versions of the same
+library.
+
 =item icon => $icon_path
 
 Sets the entity icon which would be displayed by Windows in
@@ -856,6 +861,12 @@ Select the subsystem for the generated executable. Valid values are
 C<console> and C<windows>.
 
 See the Subsystems chapter below.
+
+=item cygwin => 1
+
+For an executable, this flag indicates it is a Cygwin binary requiring
+Cygwin libraries. Also, the module will look for the executable inside
+Cygwin C<bin> directory.
 
 =back
 
@@ -926,10 +937,6 @@ different versions of your application if you want upgrades to work.
 
 Path to a file containing the license for your app in RTF format.
 
-=item work_dir => $work_dir
-
-Working dir for place temporary files.
-
 =item scripts => \@scripts
 
 Declares the set of scripts to pack in the installer as an array of
@@ -939,7 +946,7 @@ Path data structures.
 
 List of extra directories for searching Perl modules.
 
-=item extra_modules => \@modules
+=item extra_module => \@modules
 
 Win32::Packer analyzes and finds dependencies for the scripts
 automatically using L<Module::ScanDeps>, unfortunatelly, this module
@@ -948,6 +955,31 @@ is not always able to find all the dependencies.
 This option can be used to instruct the module to pack any module not
 automatically detected as a dependency.
 
+=item extra_exe => \@exes
+
+List of extra executables to be included on the installer.
+
+DLL dependencies are detected and packed too.
+
+=item extra_dir => \@dirs
+
+The given directories and their contents will be included on the
+installer.
+
+=item cygwin => $path
+
+In case your application has any Cygwin dependency (programs or
+libraries), this option tells the module where to look for Cygwin.
+
+By default the module looks for Cygwin using several heuristics.
+
+=item work_dir => $path
+
+Working dir for place temporary files.
+
+=item output_dir => $path
+
+Output directory. The generated installers will be placed there.
 
 =back
 
