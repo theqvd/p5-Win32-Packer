@@ -1000,7 +1000,8 @@ differences that may affect your programs and things that work right when
 you run your script using the perl executable from the command line,
 would fail when packed as a windows subsystem executable.
 
-Don't blame the packer, it is Windows which works that way!
+Don't blame the packer, it is Windows (or Perl on Windows) which works
+that way!
 
 =head1 SEE ALSO
 
