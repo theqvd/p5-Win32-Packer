@@ -483,7 +483,10 @@ sub _push_pe_dependencies {
     }
 }
 
-my %xs_dll_search_path_method = map { $_ => "_${_}_xs_dll_search_path" } map lc, qw(Wx);
+my %xs_dll_search_path_method = map { my $name = $_;
+                                      $name =~ s/:/_/g;
+                                      $_ => "_${name}_xs_dll_search_path"
+                                  } map lc, qw(Wx);
 
 sub _scan_xs_dll_deps {
     my ($self, $pe_deps) = @_;
@@ -494,11 +497,14 @@ sub _scan_xs_dll_deps {
             $self->log->debugf("looking for '%s' ('%s') DLL dependencies", $dep->{used_by}[0], $dep->{key});
             my @search_path = @{$self->search_path};
             if (my ($name) = $dep->{used_by}[0] =~ m{(.*)\.pm$}i) {
-                if (defined (my $method = $xs_dll_search_path_method{lc $name})) {
-                    my @special = $self->$method;
-                    $self->log->debugf("using special search path: %s", \@special);
-                    push @search_path, @special;
-                }
+                $name =~ s|/|::|g;
+                do {
+                    if (defined (my $method = $xs_dll_search_path_method{lc $name})) {
+                        my @special = $self->$method;
+                        $self->log->debugf("using special search path: %s", \@special);
+                        push @search_path, @special;
+                    }
+                } while ($name =~ s/::[^:]+$//);
             }
             my $file = path($dep->{file})->realpath;
             my $dt = do {
@@ -735,7 +741,7 @@ Win32::Packer - Pack your Perl applications for Windows
                               firewall_allow => 'localhost' } ],
                app_subsystem => 'windows',
                extra_inc => [qw(lib)],
-               extra_modules => [qw(HotDog::Vendor::Finder::Impl::Windows
+               extra_module => [qw(HotDog::Vendor::Finder::Impl::Windows
                                     IO::Socket::IP)],
                extra_exe => [ { path => 'c:\\program files\\blaster\\blaster.exe',
                                 subdir => 'blaster' } ],
