@@ -661,7 +661,7 @@ sub _make_wrapper_manifest {
         return $manifest;
     }
     else {
-        $self->log->debug("Skipping manifest creation for $script->{basename} ". Dumper($script));
+        $self->log->trace("Skipping manifest creation for $script->{basename} ". Dumper($script));
     }
     return ();
 }
