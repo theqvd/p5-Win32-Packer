@@ -634,14 +634,54 @@ sub _build__wrapper_o {
     $wrapper_o
 }
 
+sub _make_wrapper_manifest {
+    my ($self, $script) = @_;
+    if ($script->{require_administrator}) {
+        my $basename = $script->{basename};
+        my $manifest = $self->_wrapper_dir->child("$basename.manifest")->realpath;
+
+        $self->log->debug("Creating wrapper manifest '$manifest' for setting 'requireAdministrator'");
+
+        my $data = [ assembly => { xmlns => "urn:schemas-microsoft-com:asm.v1", manifestVersion => "1.0"},
+                     [ assemblyIdentity => { version => "1.0.0.0",
+                                             processorArchitecture => "X86",
+                                             name => "hello",
+                                             type => "win32" }],
+                     [ description => {}, "Hello World" ],
+                     [ trustInfo => { xmlns => "urn:schemas-microsoft-com:asm.v2"},
+                       [ security => {},
+                         [ requestedPrivileges => {},
+                           [ requestedExecutionLevel => { level => "requireAdministrator",
+                                                          uiAccess => "false" } ]]]]];
+
+        require XML::FromPerl;
+        my $doc = XML::FromPerl::xml_from_perl($data);
+        $doc->toFile($manifest, 2);
+        $self->log->debug("Wrapper manifest created at $manifest");
+        return $manifest;
+    }
+    else {
+        $self->log->debug("Skipping manifest creation for $script->{basename} ". Dumper($script));
+    }
+    return ();
+}
+
 sub _make_wrapper_rco {
     my ($self, $script) = @_;
+    my @lines;
+    if (defined (my $manifest = $self->_make_wrapper_manifest($script))) {
+        # push @lines, "1 Manifest ".c_string_quote($manifest->realpath->canonpath)."\n";
+        push @lines, "1 24 ".c_string_quote($manifest->realpath->canonpath)."\n";
+    }
     if (defined (my $icon = $script->{icon} // $self->icon)) {
         $icon->is_file or $self->_die("Icon not found at '$icon'");
+        push @lines, '2 ICON '.c_string_quote($icon->realpath->canonpath)."\n";
+    }
+    if (@lines) {
         my $basename = $script->{basename};
         my $wrapper_rc = $self->_wrapper_dir->child("$basename.rc");
         my $wrapper_rco = $self->_wrapper_dir->child("$basename.rco");
-        $wrapper_rc->spew('2 ICON '.c_string_quote($icon->realpath)."\n");
+        $wrapper_rc->spew(join '', @lines);
         $self->_run_cmd($self->windres_exe,
                         -J => 'rc',  -i => "$wrapper_rc",
                         -O => 'coff', -o => "$wrapper_rco")
