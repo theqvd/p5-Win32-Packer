@@ -7,8 +7,6 @@ use Carp;
 use Log::Any;
 use Path::Tiny;
 use Module::ScanDeps;
-use Text::CSV_XS ();
-use Data::Dumper;
 use Config;
 use Win32::Ldd qw(pe_dependencies);
 
@@ -661,7 +659,7 @@ sub _make_wrapper_manifest {
         return $manifest;
     }
     else {
-        $self->log->trace("Skipping manifest creation for $script->{basename} ". Dumper($script));
+        $self->log->trace("Skipping manifest creation for $script->{basename}");
     }
     return ();
 }

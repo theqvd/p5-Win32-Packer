@@ -16,12 +16,11 @@ DEPENDENCIES
 
 This module requires these other modules and libraries:
 
-     Win32::Lld
+     Win32::Ldd
      XML::FromPerl
      Log::Any
      Path::Tiny
      Module::ScanDeps
-     Text::CSV_XS;
      Moo
 
 COPYRIGHT AND LICENCE
