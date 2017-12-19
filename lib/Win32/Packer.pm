@@ -370,7 +370,10 @@ sub _install_extra_file {
     $self->log->info("Adding extra files");
     for (@{$self->extra_file}) {
         my $path = $_->{path};
-        my $to = $_->{subdir} // path($path->realpath->basename);
+        my $to = $path->basename;
+        if (defined (my $subdir = $_->{subdir})) {
+            $to = $subdir->child($to);
+        }
         $installer->add_file($path, $to,
                              $self->_common_file_opts($_));
     }
