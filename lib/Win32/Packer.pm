@@ -466,7 +466,7 @@ sub _build__pm_deps {
 sub _push_pe_dependencies {
     my ($self, $pe_deps, $dt, $subdir) = @_;
     if ($dt->{resolved}) {
-        my $module = path($dt->{module})->basename->stringify;
+        my $module = path($dt->{module})->basename;
         # $self->log->debugf("Adding module %s (subdir %s)", $module, $subdir);
         $module = $subdir->child($module)->stringify if defined $subdir;
         my $resolved_module = path($dt->{resolved_module});
