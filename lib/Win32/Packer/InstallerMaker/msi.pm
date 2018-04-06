@@ -156,7 +156,7 @@ sub _build__wxs_perl {
                             [ Component => { Id => $id, Guid => guid, KeyPath => 'yes' },
                               [ ProgId => { Id => $self->_mkid(progid => $basename),
                                             Icon => $file_id, IconIndex => 0 },
-                                [ Extension => { Id => ".$ext",
+                                [ Extension => { Id => "$ext",
                                                  ContentType => $hs->{content_type} // "application/x-$ext" },
                                   [ Verb => { Id => 'open', Command => '&Open',
                                               TargetFile => $file_id, Argument => '"%1"' } ] ] ] ];
