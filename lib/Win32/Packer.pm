@@ -64,6 +64,10 @@ has windres_exe    => ( is => 'lazy', isa => \&assert_file, coerce => \&path );
 has app_subsystem  => ( is => 'ro', default => 'console',
                         isa => \&assert_subsystem );
 
+has ignored_missing => (  coerce => \&to_array, is => 'rw', default => sub { [ qw( EMCLIENT.dll OCI.dll ) ] });
+
+has missing_dll_is_fatal => (  is => 'rw', default => 1 );
+
 has _pm_deps       => ( is => 'lazy' );
 has _pe_deps       => ( is => 'lazy' );
 has _wrapper_dir   => ( is => 'lazy', isa => \&assert_dir );
@@ -478,6 +482,21 @@ sub _push_pe_dependencies {
                 $pe_deps->{$module} = $resolved_module
             }
         }
+    } else {
+        # Fail if a required DLL can't be found, and missing a file is fatal.
+	# We ignore whatever might be found in $self->ignored_missing
+	# We also ignore all files that match the pattern ^ext-ms, which are
+	# internal Windows names.
+
+	my $mod = $dt->{module};
+	if ( !exists $self->{ignore_cache}) {
+		$self->{ignore_cache} = { map { $_ => 1 } @{ $self->ignored_missing } };
+	}
+
+	if ( $mod !~ /^ext-ms/ && !exists $self->{ignore_cache}->{$mod} ) {
+	        $self->log->tracef("Failed to resolve DLL dependency %s", $dt->{module});
+		die "Failed to find DLL dependency $mod" if ($self->missing_dll_is_fatal);
+	}
     }
 
     if (defined (my $children = $dt->{children})) {
